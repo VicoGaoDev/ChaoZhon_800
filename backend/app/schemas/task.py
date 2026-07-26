@@ -8,7 +8,7 @@ class TaskCreate(BaseModel):
     model: str = ""
     source: Literal["web", "app", "api"] = "web"
     prompt: str
-    num_images: int = Field(default=4, ge=1, le=8)
+    num_images: int = Field(default=4, ge=1, le=12)
     size: str = "3:4"
     resolution: str = "4K"
     custom_size: str = ""

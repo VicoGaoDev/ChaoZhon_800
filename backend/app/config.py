@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379/0"
     CELERY_WORKER_CONCURRENCY: int = 2
     CELERY_PREFETCH_MULTIPLIER: int = 1
-    MAX_ACTIVE_TASKS_PER_USER: int = 8
+    MAX_ACTIVE_TASKS_PER_USER: int = 12
     MAX_ACTIVE_TASKS_GLOBAL: int = 500
 
     AI_API_URL: str = "https://nanoapi.poloai.top/v1beta/models/gemini-2.5-flash-image-preview:generateContent"

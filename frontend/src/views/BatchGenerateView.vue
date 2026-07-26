@@ -99,7 +99,7 @@ const router = useRouter();
 const loginModalVisible = inject<Ref<boolean>>("loginModalVisible")!;
 const openPurchaseEntry = inject<() => void>("openPurchaseEntry");
 
-const MAX_BATCH_CARDS = 8;
+const MAX_BATCH_CARDS = 12;
 const DEFAULT_BATCH_CARDS = 3;
 const MAX_REFERENCE_FILE_SIZE = 20 * 1024 * 1024;
 const MAX_REFERENCE_FILE_SIZE_MB = MAX_REFERENCE_FILE_SIZE / (1024 * 1024);

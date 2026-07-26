@@ -168,8 +168,8 @@ def _validate_task_create_payload(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"提示词不能超过 {MAX_TASK_PROMPT_LENGTH} 个字符",
         )
-    if num_images < 1 or num_images > 8:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="生成数量须在 1-8 之间")
+    if num_images < 1 or num_images > 12:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="生成数量须在 1-12 之间")
     if mode == "inpaint":
         if not source_image.strip():
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请先上传原图")
