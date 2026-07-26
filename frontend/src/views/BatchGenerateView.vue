@@ -11,6 +11,7 @@ import {
   EyeOutlined,
   MessageOutlined,
   PlayCircleOutlined,
+  QuestionCircleOutlined,
   CopyOutlined,
   UploadOutlined,
 } from "@ant-design/icons-vue";
@@ -34,6 +35,7 @@ import type { GenerationModelOption, ImageResult, SceneOptionItem, TaskResult, T
 type BatchCardStatus = "idle" | "queued_local" | "submitting" | TaskResult["status"];
 type UploadItemStatus = "uploading" | "success" | "failed";
 type BatchSceneMode = "generate" | "image_edit";
+type PasteApplyScope = "global" | "all_cards" | "single_card";
 
 interface UploadPreviewItem {
   id: string;
@@ -103,6 +105,7 @@ const MAX_BATCH_CARDS = 12;
 const DEFAULT_BATCH_CARDS = 3;
 const MAX_REFERENCE_FILE_SIZE = 20 * 1024 * 1024;
 const MAX_REFERENCE_FILE_SIZE_MB = MAX_REFERENCE_FILE_SIZE / (1024 * 1024);
+const MAX_REFERENCE_FILE_SIZE_TEXT = `${MAX_REFERENCE_FILE_SIZE_MB}MB`;
 const POLL_INTERVAL_MS = 5000;
 const SUBMISSION_RETRY_DELAY_MS = 5200;
 const DEFAULT_IMAGE_SIZE_OPTIONS: SceneOptionItem[] = [
@@ -128,6 +131,7 @@ const DEFAULT_ASPECT_RATIO_OPTIONS: SceneOptionItem[] = [
 const ACTIVE_BATCH_HISTORY_PAGE_SIZE = 20;
 const failedResultAsset = withBaseUrl("failed-result.svg");
 const BATCH_GENERATE_DRAFT_KEY = "batchGenerateDraft";
+const ASPECT_RATIO_AUTO_DETECT_STORAGE_KEY = "generateAspectRatioAutoDetectEnabled";
 
 const sceneConfigLoading = ref(true);
 const sceneConfigLoaded = ref(false);
@@ -141,6 +145,7 @@ const globalSettings = ref<GlobalBatchSettings>({
   resolution: "",
   customSize: "",
 });
+const aspectRatioAutoDetectEnabled = ref(readStoredAspectRatioAutoDetectEnabled());
 const globalReferenceItems = ref<UploadPreviewItem[]>([]);
 const taskPollingInFlight = ref(false);
 const previewVisible = ref(false);
@@ -159,6 +164,12 @@ const cardReferenceUploadBlockRefs = new Map<string, HTMLElement>();
 const globalReferenceDragActive = ref(false);
 const globalReferenceDragCounter = ref(0);
 const draftHydrationReady = ref(false);
+const pasteDialogVisible = ref(false);
+const pasteDialogSubmitting = ref(false);
+const pasteDialogScope = ref<PasteApplyScope>("global");
+const pasteDialogTargetCardIds = ref<string[]>([]);
+const pendingPasteFiles = ref<File[]>([]);
+const pendingPastePreviewUrls = ref<string[]>([]);
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let queueTimer: ReturnType<typeof setTimeout> | null = null;
@@ -191,6 +202,70 @@ function createReferenceItemFromRemote(url: string): UploadPreviewItem {
     remoteUrl: url,
     status: "success",
   };
+}
+
+function createReferenceItemsFromRemoteUrls(urls: string[]) {
+  return urls
+    .map((url) => String(url || "").trim())
+    .filter(Boolean)
+    .map((url) => createReferenceItemFromRemote(url));
+}
+
+function readStoredAspectRatioAutoDetectEnabled() {
+  if (typeof window === "undefined") return false;
+  const storedValue = localStorage.getItem(ASPECT_RATIO_AUTO_DETECT_STORAGE_KEY);
+  if (storedValue == null) return true;
+  return storedValue === "1";
+}
+
+function writeStoredAspectRatioAutoDetectEnabled(enabled: boolean) {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(ASPECT_RATIO_AUTO_DETECT_STORAGE_KEY, enabled ? "1" : "0");
+}
+
+function parseAspectRatioPair(value?: string) {
+  if (!value) return null;
+  const normalized = value.trim();
+  const ratioMatch = normalized.match(/^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/);
+  if (ratioMatch) {
+    const width = Number(ratioMatch[1]);
+    const height = Number(ratioMatch[2]);
+    if (width > 0 && height > 0) return { width, height };
+  }
+
+  const sizeMatch = normalized.match(/^(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)$/);
+  if (sizeMatch) {
+    const width = Number(sizeMatch[1]);
+    const height = Number(sizeMatch[2]);
+    if (width > 0 && height > 0) return { width, height };
+  }
+
+  return null;
+}
+
+function loadImageDimensions(src: string): Promise<{ width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.decoding = "async";
+    image.onload = () => {
+      if (image.naturalWidth > 0 && image.naturalHeight > 0) {
+        resolve({ width: image.naturalWidth, height: image.naturalHeight });
+        return;
+      }
+      reject(new Error("无法读取图片尺寸"));
+    };
+    image.onerror = () => reject(new Error("图片加载失败"));
+    image.src = src;
+  });
+}
+
+async function readImageDimensionsFromFile(file: File) {
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    return await loadImageDimensions(objectUrl);
+  } finally {
+    revokeObjectUrl(objectUrl);
+  }
 }
 
 function cloneSuccessReferenceItems(items: UploadPreviewItem[]) {
@@ -396,6 +471,7 @@ const remainingSlots = computed(() => Math.max(MAX_BATCH_CARDS - activeRemoteCar
 const canAddMoreCards = computed(() => cards.value.length < MAX_BATCH_CARDS);
 const hasFinishedCards = computed(() => cards.value.some((card) => ["success", "failed"].includes(card.status)));
 const globalUploading = computed(() => globalReferenceItems.value.some((item) => item.status === "uploading"));
+const pasteEligibleCards = computed(() => cards.value.filter((card) => card.sceneType === "image_edit" && !isCardLocked(card)));
 const downloadableImages = computed(() => cards.value
   .map((card) => getPrimaryImage(card))
   .filter((image): image is ImageResult => Boolean(image && image.image_url)));
@@ -445,6 +521,64 @@ function hideCustomSize(modelKey: string) {
 function getMaxReferenceImages(modelKey: string) {
   const configured = Number(getModelOption(modelKey)?.max_reference_images || 0);
   return configured > 0 ? configured : 6;
+}
+
+function getClosestAspectRatioValue(width: number, height: number, options: SceneOptionItem[]) {
+  if (width <= 0 || height <= 0 || !options.length) return "";
+  const targetRatio = width / height;
+  let matchedValue = "";
+  let bestDiff = Number.POSITIVE_INFINITY;
+  options.forEach((item) => {
+    const parsed = parseAspectRatioPair(item.value);
+    if (!parsed) return;
+    const candidateRatio = parsed.width / parsed.height;
+    const diff = Math.abs(Math.log(targetRatio / candidateRatio));
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      matchedValue = item.value;
+    }
+  });
+  return matchedValue;
+}
+
+async function maybeAutoDetectAspectRatioForGlobal(source: File | string) {
+  if (!aspectRatioAutoDetectEnabled.value) return;
+  if (globalSettings.value.sceneType !== "image_edit") return;
+  if (hideAspectRatio(globalSettings.value.model)) return;
+  if (globalReferenceItems.value.length > 0) return;
+  const options = getAspectRatioOptions(globalSettings.value.model);
+  if (!options.length) return;
+  try {
+    const dimensions = typeof source === "string"
+      ? await loadImageDimensions(resolveImageUrl(source))
+      : await readImageDimensionsFromFile(source);
+    const matchedValue = getClosestAspectRatioValue(dimensions.width, dimensions.height, options);
+    if (matchedValue && options.some((item) => item.value === matchedValue)) {
+      globalSettings.value.size = matchedValue;
+    }
+  } catch {
+    // Ignore failures and keep current aspect ratio.
+  }
+}
+
+async function maybeAutoDetectAspectRatioForCard(card: BatchGenerateCard, source: File | string) {
+  if (!aspectRatioAutoDetectEnabled.value) return;
+  if (card.sceneType !== "image_edit") return;
+  if (hideAspectRatio(card.model)) return;
+  if (card.referenceItems.length > 0) return;
+  const options = getAspectRatioOptions(card.model);
+  if (!options.length) return;
+  try {
+    const dimensions = typeof source === "string"
+      ? await loadImageDimensions(resolveImageUrl(source))
+      : await readImageDimensionsFromFile(source);
+    const matchedValue = getClosestAspectRatioValue(dimensions.width, dimensions.height, options);
+    if (matchedValue && options.some((item) => item.value === matchedValue)) {
+      card.size = matchedValue;
+    }
+  } catch {
+    // Ignore failures and keep current aspect ratio.
+  }
 }
 
 function resolveSceneCreditCost(sceneKey: string, targetResolution = "") {
@@ -660,6 +794,10 @@ watch(generationModels, () => {
   normalizeGlobalSelections();
   cards.value.forEach((card) => normalizeCardSelections(card));
   ensureInitialCard();
+});
+
+watch(aspectRatioAutoDetectEnabled, (enabled) => {
+  writeStoredAspectRatioAutoDetectEnabled(enabled);
 });
 
 watch(
@@ -945,6 +1083,14 @@ async function uploadReferenceFilesToTarget(
     message.warning(`当前模型最多支持 ${limit} 张参考图，本次仅上传前 ${acceptedFiles.length} 张`);
   }
 
+  if (acceptedFiles.length && items.length === 0) {
+    if (target === "global") {
+      await maybeAutoDetectAspectRatioForGlobal(acceptedFiles[0]);
+    } else {
+      await maybeAutoDetectAspectRatioForCard(target, acceptedFiles[0]);
+    }
+  }
+
   let uploadedCount = 0;
   let failedCount = 0;
   let oversizedCount = 0;
@@ -1000,11 +1146,245 @@ async function uploadReferenceFilesToTarget(
     message.success(`成功上传 ${uploadedCount} 张参考图`);
   }
   if (oversizedCount > 0) {
-    message.warning(`${oversizedCount} 张图片超过 ${MAX_REFERENCE_FILE_SIZE_MB}MB，已跳过`);
+    message.warning(`${oversizedCount} 张图片超过 ${MAX_REFERENCE_FILE_SIZE_TEXT}，已跳过`);
   }
   if (failedCount > 0) {
     message.error(`${failedCount} 张参考图上传失败，请重试`);
   }
+}
+
+function getClipboardImageFiles(event: ClipboardEvent) {
+  return Array.from(event.clipboardData?.items || [])
+    .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => Boolean(file));
+}
+
+function getAvailableReferenceSlots(items: UploadPreviewItem[], modelKey: string) {
+  return Math.max(0, getMaxReferenceImages(modelKey) - items.length);
+}
+
+function getPasteTargetCards(cardIds: string[]) {
+  const idSet = new Set(cardIds.filter(Boolean));
+  return pasteEligibleCards.value.filter((card) => idSet.has(card.id));
+}
+
+function getPasteScopeUploadLimit(scope: PasteApplyScope, targetCardIds: string[]) {
+  if (scope === "global") {
+    if (globalSettings.value.sceneType !== "image_edit") return 0;
+    return getAvailableReferenceSlots(globalReferenceItems.value, globalSettings.value.model);
+  }
+  if (scope === "single_card") {
+    const targetCards = getPasteTargetCards(targetCardIds);
+    if (!targetCards.length) return 0;
+    return targetCards.reduce((maxSlots, card) => (
+      Math.max(maxSlots, getAvailableReferenceSlots(card.referenceItems, card.model))
+    ), 0);
+  }
+  const imageEditCards = pasteEligibleCards.value;
+  if (!imageEditCards.length) return 0;
+  return imageEditCards.reduce((maxSlots, card) => (
+    Math.max(maxSlots, getAvailableReferenceSlots(card.referenceItems, card.model))
+  ), 0);
+}
+
+function appendRemoteReferences(
+  items: UploadPreviewItem[],
+  modelKey: string,
+  remoteUrls: string[],
+) {
+  const remainingSlots = getAvailableReferenceSlots(items, modelKey);
+  const acceptedUrls = remoteUrls.slice(0, remainingSlots);
+  return {
+    nextItems: [...items, ...createReferenceItemsFromRemoteUrls(acceptedUrls)],
+    appliedCount: acceptedUrls.length,
+  };
+}
+
+async function uploadReferenceFilesOnce(
+  files: File[],
+  maxUploads = 0,
+) {
+  const imageFiles = files.filter((file) => isReferenceImageFile(file));
+  if (!imageFiles.length) {
+    if (files.length) {
+      message.warning("仅支持上传图片文件");
+    }
+    return { uploadedUrls: [] as string[], uploadedCount: 0, failedCount: 0, oversizedCount: 0 };
+  }
+
+  const acceptedFiles = maxUploads > 0 ? imageFiles.slice(0, maxUploads) : [];
+  if (!acceptedFiles.length) {
+    return { uploadedUrls: [] as string[], uploadedCount: 0, failedCount: 0, oversizedCount: 0 };
+  }
+  if (imageFiles.length > acceptedFiles.length) {
+    message.warning(`本次仅处理前 ${acceptedFiles.length} 张粘贴图片`);
+  }
+
+  const uploadedUrls: string[] = [];
+  let uploadedCount = 0;
+  let failedCount = 0;
+  let oversizedCount = 0;
+
+  for (const file of acceptedFiles) {
+    if (file.size > MAX_REFERENCE_FILE_SIZE) {
+      oversizedCount += 1;
+      continue;
+    }
+    try {
+      const res = await uploadReferenceImage(file, "ref");
+      uploadedUrls.push(res.url);
+      uploadedCount += 1;
+    } catch {
+      failedCount += 1;
+    }
+  }
+
+  return { uploadedUrls, uploadedCount, failedCount, oversizedCount };
+}
+
+function resetPasteDialogState() {
+  pendingPastePreviewUrls.value.forEach((url) => revokeObjectUrl(url));
+  pendingPastePreviewUrls.value = [];
+  pasteDialogVisible.value = false;
+  pasteDialogSubmitting.value = false;
+  pasteDialogScope.value = "global";
+  pasteDialogTargetCardIds.value = [];
+  pendingPasteFiles.value = [];
+}
+
+function openPasteDialog(files: File[]) {
+  const hasGlobalTarget = globalSettings.value.sceneType === "image_edit";
+  const eligibleCards = pasteEligibleCards.value;
+  if (!hasGlobalTarget && !eligibleCards.length) {
+    message.warning("当前没有可接收参考图的图编辑配置，请先添加或切换到图编辑卡片");
+    return;
+  }
+  pendingPasteFiles.value = files;
+  pendingPastePreviewUrls.value.forEach((url) => revokeObjectUrl(url));
+  pendingPastePreviewUrls.value = files.map((file) => URL.createObjectURL(file));
+  pasteDialogScope.value = hasGlobalTarget ? "global" : (eligibleCards.length > 1 ? "all_cards" : "single_card");
+  pasteDialogTargetCardIds.value = eligibleCards[0]?.id ? [eligibleCards[0].id] : [];
+  pasteDialogVisible.value = true;
+}
+
+function togglePasteTargetCard(cardId: string) {
+  if (!cardId) return;
+  if (pasteDialogTargetCardIds.value.includes(cardId)) {
+    pasteDialogTargetCardIds.value = pasteDialogTargetCardIds.value.filter((id) => id !== cardId);
+    return;
+  }
+  pasteDialogTargetCardIds.value = [...pasteDialogTargetCardIds.value, cardId];
+}
+
+async function confirmPasteDialog() {
+  if (!(await ensureAuthenticated())) return;
+  const files = pendingPasteFiles.value.slice();
+  const scope = pasteDialogScope.value;
+  const targetCardIds = pasteDialogTargetCardIds.value.slice();
+  const maxUploads = getPasteScopeUploadLimit(scope, targetCardIds);
+  if (!maxUploads) {
+    message.warning("所选目标已没有可用参考图位置");
+    return;
+  }
+
+  pasteDialogSubmitting.value = true;
+  try {
+    const { uploadedUrls, uploadedCount, failedCount, oversizedCount } = await uploadReferenceFilesOnce(files, maxUploads);
+    if (!uploadedUrls.length) {
+      if (oversizedCount > 0) {
+        message.warning(`${oversizedCount} 张图片超过 ${MAX_REFERENCE_FILE_SIZE_TEXT}，已跳过`);
+      }
+      if (failedCount > 0) {
+        message.error(`${failedCount} 张参考图上传失败，请重试`);
+      }
+      if (!failedCount && !oversizedCount) {
+        message.warning("没有可应用的参考图");
+      }
+      return;
+    }
+
+    if (scope === "global") {
+      await maybeAutoDetectAspectRatioForGlobal(uploadedUrls[0]);
+      const { nextItems, appliedCount } = appendRemoteReferences(globalReferenceItems.value, globalSettings.value.model, uploadedUrls);
+      globalReferenceItems.value = nextItems;
+      normalizeGlobalSelections();
+      message.success(`已上传 ${uploadedCount} 张参考图，并加入全局设置`);
+      if (appliedCount < uploadedUrls.length) {
+        message.warning("部分参考图因达到全局上限未加入");
+      }
+    } else if (scope === "single_card") {
+      const targetCards = getPasteTargetCards(targetCardIds);
+      if (!targetCards.length) {
+        message.warning("目标任务卡片不存在或不支持参考图");
+        return;
+      }
+      await Promise.all(
+        targetCards
+          .filter((card) => !card.referenceItems.length)
+          .map((card) => maybeAutoDetectAspectRatioForCard(card, uploadedUrls[0])),
+      );
+      let appliedCardCount = 0;
+      let limitedCardCount = 0;
+      targetCards.forEach((card) => {
+        const { nextItems, appliedCount } = appendRemoteReferences(card.referenceItems, card.model, uploadedUrls);
+        if (appliedCount > 0) {
+          commitReferenceItems(nextItems, card);
+          normalizeCardSelections(card);
+          appliedCardCount += 1;
+        }
+        if (appliedCount < uploadedUrls.length) {
+          limitedCardCount += 1;
+        }
+      });
+      if (!appliedCardCount) {
+        message.warning("所选任务卡片都已达到参考图上限");
+        return;
+      }
+      message.success(`已上传 ${uploadedCount} 张参考图，并作用到 ${appliedCardCount} 张任务卡片`);
+      if (limitedCardCount > 0) {
+        message.warning("部分卡片因达到参考图上限，未能加入全部粘贴图片");
+      }
+    } else {
+      const targets = pasteEligibleCards.value;
+      await Promise.all(
+        targets
+          .filter((card) => !card.referenceItems.length)
+          .map((card) => maybeAutoDetectAspectRatioForCard(card, uploadedUrls[0])),
+      );
+      let appliedCardCount = 0;
+      targets.forEach((card) => {
+        const { nextItems, appliedCount } = appendRemoteReferences(card.referenceItems, card.model, uploadedUrls);
+        if (appliedCount > 0) {
+          commitReferenceItems(nextItems, card);
+          normalizeCardSelections(card);
+          appliedCardCount += 1;
+        }
+      });
+      if (!appliedCardCount) {
+        message.warning("所有图编辑卡片都已达到参考图上限");
+        return;
+      }
+      message.success(`已上传 ${uploadedCount} 张参考图，并作用到 ${appliedCardCount} 张任务卡片`);
+    }
+
+    if (oversizedCount > 0) {
+      message.warning(`${oversizedCount} 张图片超过 ${MAX_REFERENCE_FILE_SIZE_TEXT}，已跳过`);
+    }
+    if (failedCount > 0) {
+      message.error(`${failedCount} 张参考图上传失败，请重试`);
+    }
+    resetPasteDialogState();
+  } finally {
+    pasteDialogSubmitting.value = false;
+  }
+}
+
+function handleBatchReferencePaste(event: ClipboardEvent) {
+  const files = getClipboardImageFiles(event);
+  if (!files.length) return;
+  event.preventDefault();
+  openPasteDialog(files);
 }
 
 function removeReferenceItem(items: UploadPreviewItem[], index: number) {
@@ -1653,6 +2033,7 @@ async function loadTaskScenes() {
 }
 
 onMounted(async () => {
+  window.addEventListener("paste", handleBatchReferencePaste);
   await loadTaskScenes();
   restoreBatchGenerateDraft();
   normalizeGlobalSelections();
@@ -1669,6 +2050,8 @@ onBeforeUnmount(() => {
   unbindGlobalReferenceDragHandlers?.();
   unbindCardReferenceDragHandlers.forEach((unbind) => unbind());
   unbindCardReferenceDragHandlers.clear();
+  window.removeEventListener("paste", handleBatchReferencePaste);
+  pendingPastePreviewUrls.value.forEach((url) => revokeObjectUrl(url));
   globalReferenceItems.value.forEach((item) => revokeObjectUrl(item.objectUrl));
   cards.value.forEach((card) => card.referenceItems.forEach((item) => revokeObjectUrl(item.objectUrl)));
 });
@@ -1704,6 +2087,17 @@ onBeforeUnmount(() => {
       </template>
 
       <div v-if="sceneConfigLoaded" class="panel-body panel-body-compact global-panel-body">
+        <div class="batch-aspect-auto-row">
+          <a-switch v-model:checked="aspectRatioAutoDetectEnabled" size="small" />
+          <div class="batch-aspect-auto-text">
+            <span>比例自动识别</span>
+            <a-tooltip title="开启后，上传、拖拽或粘贴到某个配置的第一张参考图时，会自动选择最匹配的宽高比。">
+              <button type="button" class="batch-aspect-auto-help" aria-label="比例自动识别说明">
+                <QuestionCircleOutlined />
+              </button>
+            </a-tooltip>
+          </div>
+        </div>
         <div class="global-settings-layout" :class="{ 'has-reference-column': globalSettings.sceneType === 'image_edit' }">
             <div class="global-params-column">
               <div class="field-block field-block-no-title">
@@ -1777,7 +2171,7 @@ onBeforeUnmount(() => {
             >
               <div class="panel-head">
                 <h3>参考图</h3>
-                <span class="panel-hint">(最多 {{ getMaxReferenceImages(globalSettings.model) }} 张，支持拖拽上传)</span>
+                <span class="panel-hint">(最多 {{ getMaxReferenceImages(globalSettings.model) }} 张，支持拖拽、粘贴上传)</span>
               </div>
 
               <input
@@ -1819,7 +2213,7 @@ onBeforeUnmount(() => {
                   <a-spin v-if="globalUploading" size="small" />
                   <template v-else>
                     <UploadOutlined class="upload-add-icon" />
-                    <span>{{ globalReferenceDragActive ? "松开上传" : "拖拽或点击" }}</span>
+                    <span>{{ globalReferenceDragActive ? "松开上传" : "拖拽、粘贴或点击" }}</span>
                   </template>
                 </div>
               </div>
@@ -1969,7 +2363,7 @@ onBeforeUnmount(() => {
               <div class="panel-head">
                 <h3>参考图</h3>
                 <span class="panel-hint">
-                  {{ isImageEditModel(card.model) ? `(最多 ${getMaxReferenceImages(card.model)} 张，支持拖拽上传)` : "(可上传参考图，当前模型默认不使用)" }}
+                  {{ isImageEditModel(card.model) ? `(最多 ${getMaxReferenceImages(card.model)} 张，支持拖拽、粘贴上传)` : "(可上传参考图，当前模型默认不使用)" }}
                 </span>
               </div>
 
@@ -2014,7 +2408,7 @@ onBeforeUnmount(() => {
                   <a-spin v-if="hasUploadingReferences(card.referenceItems)" size="small" />
                   <template v-else>
                     <UploadOutlined class="upload-add-icon" />
-                    <span>{{ card.dragActive ? "松开上传" : "拖拽或点击" }}</span>
+                    <span>{{ card.dragActive ? "松开上传" : "拖拽、粘贴或点击" }}</span>
                   </template>
                 </div>
               </div>
@@ -2165,6 +2559,76 @@ onBeforeUnmount(() => {
     <a-modal v-model:open="previewVisible" title="图片预览" :footer="null" width="880px">
       <img :src="previewCurrent" alt="预览图" class="preview-modal-image" />
     </a-modal>
+    <a-modal
+      v-model:open="pasteDialogVisible"
+      title="选择粘贴作用范围"
+      width="760px"
+      :confirm-loading="pasteDialogSubmitting"
+      ok-text="开始应用"
+      cancel-text="取消"
+      @ok="confirmPasteDialog"
+      @cancel="resetPasteDialogState"
+    >
+      <div class="paste-scope-dialog">
+        <div class="paste-scope-tip">
+          已检测到 {{ pendingPasteFiles.length }} 张粘贴图片。图片只会上传一次，若作用到多个卡片，将复用同一张已上传参考图。
+        </div>
+        <div v-if="pendingPastePreviewUrls.length" class="paste-preview-grid">
+          <button
+            v-for="(url, index) in pendingPastePreviewUrls"
+            :key="`${url}-${index}`"
+            type="button"
+            class="paste-preview-item"
+            @click="previewCurrent = url; previewVisible = true"
+          >
+            <img :src="url" :alt="`粘贴图片 ${index + 1}`" />
+          </button>
+        </div>
+        <a-radio-group v-model:value="pasteDialogScope" class="paste-scope-group">
+          <a-radio-button value="global" :disabled="globalSettings.sceneType !== 'image_edit'">加入全局参考图</a-radio-button>
+          <a-radio-button value="all_cards" :disabled="!pasteEligibleCards.length">作用到所有卡片</a-radio-button>
+          <a-radio-button value="single_card" :disabled="!pasteEligibleCards.length">作用到选中卡片</a-radio-button>
+        </a-radio-group>
+        <div class="paste-scope-desc-inline">
+          <template v-if="pasteDialogScope === 'global'">
+            后续可继续通过“应用到全部”带入所有卡片。
+          </template>
+          <template v-else-if="pasteDialogScope === 'all_cards'">
+            会按每张图编辑卡片自己的参考图上限分别加入。
+          </template>
+          <template v-else>
+            可多选卡片，仅把粘贴图片加入你选中的那些卡片。
+          </template>
+        </div>
+        <div v-if="pasteDialogScope === 'single_card'" class="paste-card-grid">
+          <button
+            v-for="card in pasteEligibleCards"
+            :key="card.id"
+            type="button"
+            class="paste-card-chip"
+            :class="{ active: pasteDialogTargetCardIds.includes(card.id) }"
+            @click="togglePasteTargetCard(card.id)"
+          >
+            <div class="paste-card-chip-head">
+              <span class="paste-card-chip-title">任务 {{ cards.findIndex((item) => item.id === card.id) + 1 }}</span>
+              <span
+                class="paste-card-chip-check"
+                :class="{ active: pasteDialogTargetCardIds.includes(card.id) }"
+                aria-hidden="true"
+              >
+                <span class="paste-card-chip-check-icon">{{ pasteDialogTargetCardIds.includes(card.id) ? "✓" : "" }}</span>
+              </span>
+            </div>
+            <div class="paste-card-chip-subhead">
+              <span class="paste-card-chip-meta">
+                {{ card.referenceItems.length }}/{{ getMaxReferenceImages(card.model) }} 张参考图
+              </span>
+            </div>
+            <div class="paste-card-chip-desc">{{ card.prompt.trim() || "未填写提示词" }}</div>
+          </button>
+        </div>
+      </div>
+    </a-modal>
     <FeedbackDialog
       v-model:open="feedbackDialogOpen"
       :task-id="feedbackTarget?.taskId"
@@ -2290,6 +2754,37 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   gap: 10px;
+}
+
+.batch-aspect-auto-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.batch-aspect-auto-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.batch-aspect-auto-help {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color var(--motion-duration-fast) var(--motion-ease-soft);
+}
+
+.batch-aspect-auto-help:hover {
+  color: var(--theme-accent);
 }
 
 .global-scene-switch {
@@ -3240,6 +3735,187 @@ onBeforeUnmount(() => {
   width: 100%;
   max-height: 75vh;
   object-fit: contain;
+}
+
+.paste-scope-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.paste-scope-tip {
+  color: var(--text-secondary);
+  line-height: 1.7;
+}
+
+.paste-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: 10px;
+}
+
+.paste-preview-item {
+  aspect-ratio: 1;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--theme-border);
+  border-radius: 12px;
+  background: linear-gradient(180deg, var(--theme-panel-bg-soft), var(--theme-panel-bg));
+  cursor: pointer;
+  transition:
+    transform var(--motion-duration-fast) var(--motion-ease-soft),
+    border-color var(--motion-duration-fast) var(--motion-ease-soft),
+    box-shadow var(--motion-duration-fast) var(--motion-ease-soft);
+}
+
+.paste-preview-item:hover {
+  transform: translateY(-1px);
+  border-color: var(--theme-border-strong);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
+}
+
+.paste-preview-item img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.paste-scope-group {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.paste-scope-group :deep(.ant-radio-button-wrapper) {
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  border-inline-start-width: 1px;
+  border-color: var(--theme-border);
+  background: linear-gradient(180deg, var(--theme-panel-bg-soft), var(--theme-panel-bg));
+  color: var(--theme-title);
+  font-weight: 600;
+}
+
+.paste-scope-group :deep(.ant-radio-button-wrapper:not(:first-child)::before) {
+  display: none;
+}
+
+.paste-scope-group :deep(.ant-radio-button-wrapper-checked:not(.ant-radio-button-wrapper-disabled)) {
+  border-color: color-mix(in srgb, var(--theme-accent) 34%, transparent);
+  background: color-mix(in srgb, var(--theme-accent) 10%, var(--theme-panel-bg));
+  color: var(--theme-accent);
+  box-shadow: 0 0 0 2px var(--theme-focus-ring);
+}
+
+.paste-scope-group :deep(.ant-radio-button-wrapper-disabled) {
+  opacity: 0.52;
+}
+
+.paste-scope-desc-inline {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.paste-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.paste-card-chip {
+  padding: 12px;
+  border: 1px solid var(--theme-border);
+  border-radius: 12px;
+  background: linear-gradient(180deg, var(--theme-panel-bg-soft), var(--theme-panel-bg));
+  text-align: left;
+  cursor: pointer;
+  transition:
+    transform var(--motion-duration-fast) var(--motion-ease-soft),
+    border-color var(--motion-duration-fast) var(--motion-ease-soft),
+    box-shadow var(--motion-duration-fast) var(--motion-ease-soft),
+    background var(--motion-duration-fast) var(--motion-ease-soft);
+}
+
+.paste-card-chip:hover {
+  transform: translateY(-1px);
+  border-color: var(--theme-border-strong);
+}
+
+.paste-card-chip.active {
+  border-color: color-mix(in srgb, var(--theme-accent) 34%, transparent);
+  background: color-mix(in srgb, var(--theme-accent) 8%, var(--theme-panel-bg));
+  box-shadow: 0 0 0 2px var(--theme-focus-ring);
+}
+
+.paste-card-chip-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.paste-card-chip-subhead {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.paste-card-chip-title {
+  color: var(--theme-title);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.paste-card-chip-check {
+  width: 20px;
+  height: 20px;
+  border: 1.5px solid color-mix(in srgb, var(--theme-accent) 32%, var(--theme-border));
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--theme-accent) 4%, var(--theme-panel-bg));
+  transition:
+    border-color var(--motion-duration-fast) var(--motion-ease-soft),
+    background var(--motion-duration-fast) var(--motion-ease-soft),
+    box-shadow var(--motion-duration-fast) var(--motion-ease-soft),
+    transform var(--motion-duration-fast) var(--motion-ease-soft);
+}
+
+.paste-card-chip-check.active {
+  border-color: var(--theme-accent);
+  background: var(--theme-accent);
+  box-shadow: 0 6px 14px rgba(245, 158, 11, 0.22);
+}
+
+.paste-card-chip-check-icon {
+  color: #5b3300;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.paste-card-chip-meta {
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.paste-card-chip-desc {
+  margin-top: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .batch-card-compact .setting-inline-row-primary :deep(.card-setting-select),
