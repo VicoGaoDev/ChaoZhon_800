@@ -1,9 +1,16 @@
 <script setup lang="ts">
-import { computed, h, ref } from "vue";
+import { computed, ref } from "vue";
 import { message } from "ant-design-vue";
-import { CopyOutlined, DownloadOutlined, LoadingOutlined, PictureOutlined, ReloadOutlined } from "@ant-design/icons-vue";
+import { CopyOutlined, DownloadOutlined, PictureOutlined, ReloadOutlined } from "@ant-design/icons-vue";
 import dayjs from "dayjs";
-import { getDisplayImageUrl, getPreviewImageUrl, resolveImageUrl, resolvePreviewImageUrl } from "@/api/images";
+import {
+  exceedsRealtimeImagePreviewLimit,
+  getDisplayImageUrl,
+  getPreviewImageUrl,
+  LARGE_IMAGE_PREVIEW_NOTICE,
+  resolveImageUrl,
+  resolvePreviewImageUrl,
+} from "@/api/images";
 import { withBaseUrl } from "@/lib/assets";
 import { getTaskImageFailureMessage } from "@/lib/generationErrors";
 import type { ImageResult, TaskApiAttempt, UserHistoryCard } from "@/types";
@@ -154,15 +161,25 @@ function getNestedPreviewSrc(image: Pick<ImageResult, "thumb_url" | "image_url" 
   return getPreviewImageUrl(image);
 }
 
-function getDetailImageSrc(item: UserHistoryCard, image: Pick<ImageResult, "thumb_url" | "image_url" | "preview_url" | "status">) {
+function shouldShowDetailLargeImagePreviewNotice(item: UserHistoryCard, image: Pick<ImageResult, "status" | "image_size_bytes">) {
+  return !isHistoryItemExpired(item) && image.status === "success" && exceedsRealtimeImagePreviewLimit(image.image_size_bytes);
+}
+
+function getDetailImageSrc(item: UserHistoryCard, image: Pick<ImageResult, "thumb_url" | "image_url" | "preview_url" | "status" | "image_size_bytes">) {
   if (isHistoryItemExpired(item) && image.status === "success") {
     return expiredResultAsset;
+  }
+  if (shouldShowDetailLargeImagePreviewNotice(item, image)) {
+    return "";
   }
   return getNestedImageSrc(image);
 }
 
-function getDetailPreviewSrc(item: UserHistoryCard, image: Pick<ImageResult, "thumb_url" | "image_url" | "preview_url" | "status">) {
+function getDetailPreviewSrc(item: UserHistoryCard, image: Pick<ImageResult, "thumb_url" | "image_url" | "preview_url" | "status" | "image_size_bytes">) {
   if (isHistoryItemExpired(item) && image.status === "success") {
+    return "";
+  }
+  if (shouldShowDetailLargeImagePreviewNotice(item, image)) {
     return "";
   }
   return getNestedPreviewSrc(image);
@@ -207,9 +224,6 @@ function handleDownload(item: UserHistoryCard) {
     @update:open="emit('update:open', $event)"
   >
     <div v-if="loading" class="detail-loading">
-      <a-spin
-        :indicator="h(LoadingOutlined, { style: { fontSize: '28px', color: '#7c8db5' } })"
-      />
       <span>正在加载任务详情...</span>
     </div>
     <template v-else-if="item">
@@ -252,10 +266,11 @@ function handleDownload(item: UserHistoryCard) {
                 <div v-if="img.status === 'failed'" class="detail-failure-message">
                   {{ getDetailFailureMessage(item, img) }}
                 </div>
+                <div v-else-if="shouldShowDetailLargeImagePreviewNotice(item, img)" class="detail-preview-notice">
+                  <span>{{ LARGE_IMAGE_PREVIEW_NOTICE }}</span>
+                </div>
                 <div v-else class="result-card-placeholder">
-                  <a-spin
-                    :indicator="h(LoadingOutlined, { style: { fontSize: '28px', color: '#7c8db5' } })"
-                  />
+                  <span>图片处理中...</span>
                 </div>
               </div>
             </div>
@@ -688,10 +703,48 @@ function handleDownload(item: UserHistoryCard) {
   align-items: center;
   justify-content: center;
   padding: 16px;
-  color: var(--text-secondary);
+  color: var(--theme-text-primary);
   text-align: center;
-  font-size: 28px;
+  font-size: 15px;
+  line-height: 1.6;
+  font-weight: 600;
   background: linear-gradient(180deg, var(--theme-panel-bg-soft), var(--theme-panel-bg));
+
+  span {
+    max-width: min(100%, 240px);
+    padding: 10px 14px;
+    border-radius: 12px;
+    background: rgba(var(--theme-surface-strong-rgb), 0.84);
+    box-shadow: 0 8px 18px rgba(76, 52, 26, 0.1);
+  }
+}
+
+.detail-preview-notice {
+  position: relative;
+  z-index: 3;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  color: #6f4d1f;
+  text-align: center;
+  font-size: 15px;
+  line-height: 1.75;
+  font-weight: 600;
+  background:
+    linear-gradient(180deg, rgba(255, 249, 241, 0.94), rgba(255, 245, 232, 0.98)),
+    linear-gradient(180deg, var(--theme-panel-bg-soft), var(--theme-panel-bg));
+
+  span {
+    max-width: min(100%, 320px);
+    padding: 12px 16px;
+    border-radius: 14px;
+    background: rgba(255, 252, 247, 0.98);
+    border: 1px solid rgba(201, 160, 102, 0.22);
+    box-shadow: 0 12px 28px rgba(76, 52, 26, 0.14);
+  }
 }
 
 .failed-result-image {

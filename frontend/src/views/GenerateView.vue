@@ -30,7 +30,16 @@ import {
 import { getTaskScenes } from "@/api/config";
 import { deleteHistoryTask, fetchHistory } from "@/api/history";
 import { createTask, getTasks } from "@/api/tasks";
-import { deleteImage, getDisplayImageUrl, getDownloadUrl, getPreviewImageUrl, resolveImageUrl, resolvePreviewImageUrl } from "@/api/images";
+import {
+  deleteImage,
+  exceedsRealtimeImagePreviewLimit,
+  getDisplayImageUrl,
+  getDownloadUrl,
+  getPreviewImageUrl,
+  LARGE_IMAGE_PREVIEW_NOTICE,
+  resolveImageUrl,
+  resolvePreviewImageUrl,
+} from "@/api/images";
 import { reversePrompt } from "@/api/promptReverse";
 import { getUserAssetStats, uploadUserAssetFile } from "@/api/userAssets";
 import { uploadReferenceImage } from "@/api/upload";
@@ -1684,7 +1693,12 @@ function getResultPreviewUrl(img: ImageResult) {
 function getGeneratedResultDisplayUrl(task: GeneratedTaskItem, img: ImageResult) {
   if (img.status !== "success") return getResultDisplayUrl(img);
   if (isGeneratedTaskExpired(task)) return expiredResultAsset;
+  if (shouldShowGeneratedLargeImagePreviewNotice(task, img)) return "";
   return getResultDisplayUrl(img);
+}
+
+function shouldShowGeneratedLargeImagePreviewNotice(task: GeneratedTaskItem, img: ImageResult) {
+  return img.status === "success" && !isGeneratedTaskExpired(task) && exceedsRealtimeImagePreviewLimit(img.image_size_bytes);
 }
 
 function getGeneratedResultPreviewUrl(task: GeneratedTaskItem, img: ImageResult) {
@@ -2987,6 +3001,49 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
                   >
                     <template v-if="item.image.status === 'success' && getGeneratedResultDisplayUrl(item.task, item.image)">
                       <img :src="getGeneratedResultDisplayUrl(item.task, item.image)" alt="生成结果" loading="lazy" />
+                      <div class="result-actions">
+                        <a-tooltip v-if="canEditGeneratedImage(item.task, item.image)" title="结果图编辑">
+                          <a-button shape="circle" class="icon-chip" @click.stop="handleEditImageTask(item.task, item.image)">
+                            <template #icon><EditOutlined /></template>
+                          </a-button>
+                        </a-tooltip>
+                        <a-tooltip v-if="canInpaintGeneratedImage(item.task, item.image)" title="局部重绘">
+                          <a-button shape="circle" class="icon-chip" @click.stop="handleInpaintGeneratedImage(item.task, item.image)">
+                            <template #icon><HighlightOutlined /></template>
+                          </a-button>
+                        </a-tooltip>
+                        <a-tooltip v-if="canCreateTemplateFromGeneratedTask(item.task, item.image)" title="设为创意模版">
+                          <a-button shape="circle" class="icon-chip" @click.stop="handleCreateTemplateFromGeneratedTask(item.task, item.image)">
+                            <template #icon><PictureOutlined /></template>
+                          </a-button>
+                        </a-tooltip>
+                        <a-tooltip title="重新生成">
+                          <a-button
+                            shape="circle"
+                            class="icon-chip"
+                            :disabled="!item.taskId"
+                            @click.stop="handleReeditTask(item.task)"
+                          >
+                            <template #icon><ReloadOutlined /></template>
+                          </a-button>
+                        </a-tooltip>
+                        <a-tooltip title="下载原图">
+                          <a-button
+                            shape="circle"
+                            class="icon-chip"
+                            :disabled="isGeneratedTaskExpired(item.task)"
+                            @click.stop="handleDownload(item.image.id, item.image.image_url, item.image.preview_url)"
+                          >
+                            <template #icon><DownloadOutlined /></template>
+                          </a-button>
+                        </a-tooltip>
+                      </div>
+                    </template>
+
+                    <template v-else-if="shouldShowGeneratedLargeImagePreviewNotice(item.task, item.image)">
+                      <div class="result-preview-notice">
+                        <span>{{ LARGE_IMAGE_PREVIEW_NOTICE }}</span>
+                      </div>
                       <div class="result-actions">
                         <a-tooltip v-if="canEditGeneratedImage(item.task, item.image)" title="结果图编辑">
                           <a-button shape="circle" class="icon-chip" @click.stop="handleEditImageTask(item.task, item.image)">
@@ -4971,6 +5028,22 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
   padding: 28px;
   background: linear-gradient(180deg, #fff2ef, #ffdcd5);
   opacity: 0.96;
+}
+
+.result-preview-notice {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  color: var(--theme-text-secondary);
+  font-size: 13px;
+  line-height: 1.7;
+  background:
+    linear-gradient(180deg, rgba(var(--theme-surface-strong-rgb), 0.78), rgba(var(--theme-page-base-rgb), 0.92)),
+    linear-gradient(180deg, var(--theme-panel-bg-soft), var(--theme-panel-bg));
 }
 
 .result-actions {
