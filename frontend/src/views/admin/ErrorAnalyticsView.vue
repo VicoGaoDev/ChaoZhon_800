@@ -94,9 +94,9 @@ const fallbackTriggerConditionGroups = [
     conditions: ["缺少配置路径", "对应的 base64 数据"],
   },
   {
-    title: "图片像素超限",
-    desc: "主接口因输入或结果图片像素数量超出限制失败时调用备用接口。",
-    conditions: ["图像像素数量超出限制", "图片像素数量超出限制", "像素数量超出限制", "image pixel count exceeds limit", "image pixels exceed limit"],
+    title: "图片限制超限",
+    desc: "主接口因输入图片像素、解码总量等图片限制失败时调用备用接口。",
+    conditions: ["图像像素数量超出限制", "图片像素数量超出限制", "像素数量超出限制", "image pixel count exceeds limit", "image pixels exceed limit", "decode images: images exceed total limit"],
   },
   {
     title: "上游连接断开",

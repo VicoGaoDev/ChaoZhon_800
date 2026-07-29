@@ -138,7 +138,7 @@ def _is_configured_image_path_missing_error(error_message: str) -> bool:
     return "生图接口返回内容缺少配置路径" in message and "对应的 base64 数据" in message
 
 
-def _is_image_pixel_limit_error(error_message: str) -> bool:
+def _is_image_limit_error(error_message: str) -> bool:
     message = (error_message or "").strip()
     if not message:
         return False
@@ -149,6 +149,8 @@ def _is_image_pixel_limit_error(error_message: str) -> bool:
         r"image\s+pixel\s+count\s+exceeds?\s+(?:the\s+)?limit",
         r"image\s+pixels?\s+exceeds?\s+(?:the\s+)?limit",
         r"pixels?\s+exceeds?\s+(?:the\s+)?limit",
+        r"decode\s+images:\s+images\s+exceed\s+total\s+limit",
+        r"images\s+exceed\s+total\s+limit",
     )
     return any(re.search(pattern, message, flags=re.IGNORECASE) for pattern in patterns)
 
@@ -186,7 +188,7 @@ def _should_use_fallback_api(http_status: int | None, error_message: str) -> boo
         return True
     if _is_configured_image_path_missing_error(error_message):
         return True
-    if _is_image_pixel_limit_error(error_message):
+    if _is_image_limit_error(error_message):
         return True
     if _is_upstream_disconnect_error(error_message):
         return True
