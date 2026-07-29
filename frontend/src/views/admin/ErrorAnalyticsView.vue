@@ -82,6 +82,34 @@ const columns = [
   { title: "错误信息", dataIndex: "error_message", width: 720 },
 ];
 
+const fallbackTriggerConditionGroups = [
+  {
+    title: "HTTP 状态",
+    desc: "主接口直接返回这些 HTTP 状态，或错误文案中能识别出这些状态码时调用备用接口。",
+    conditions: ["HTTP 502", "HTTP 503", "HTTP 504", "错误文案包含 502/503/504"],
+  },
+  {
+    title: "结果解析异常",
+    desc: "上游响应成功但缺少配置的结果图字段，也会尝试备用接口。",
+    conditions: ["缺少配置路径", "对应的 base64 数据"],
+  },
+  {
+    title: "图片像素超限",
+    desc: "主接口因输入或结果图片像素数量超出限制失败时调用备用接口。",
+    conditions: ["图像像素数量超出限制", "图片像素数量超出限制", "像素数量超出限制", "image pixel count exceeds limit", "image pixels exceed limit"],
+  },
+  {
+    title: "上游连接断开",
+    desc: "主接口连接被上游异常断开或协议层断连时调用备用接口。",
+    conditions: ["生图接口连接被上游异常断开", "upstream connection closed unexpectedly", "server disconnected without sending a response", "remote protocol error"],
+  },
+  {
+    title: "模型访问权限",
+    desc: "主接口 token 没有当前模型访问权限时调用备用接口。",
+    conditions: ["token has no access to model", "token has no access tomodel", "no access to model", "无权访问模型", "没有权限访问模型"],
+  },
+];
+
 const filteredItems = computed(() => analytics.value?.items || []);
 const showTaskTable = computed(() => fallbackOnly.value || Boolean(selectedErrorCategory.value));
 
@@ -549,6 +577,33 @@ onMounted(async () => {
       </div>
     </div>
 
+    <div class="fallback-trigger-panel warm-card motion-card-lift motion-fade-up" style="--motion-delay: 140ms">
+      <div class="fallback-trigger-head">
+        <div>
+          <div class="fallback-trigger-title">备用接口触发条件</div>
+          <div class="fallback-trigger-desc">
+            以下规则为静态记录，和图片生成 worker 的备用接口判断保持一致；命中后会尝试调用绑定的备用接口。
+          </div>
+        </div>
+        <span class="fallback-trigger-badge">图片任务</span>
+      </div>
+      <div class="fallback-trigger-grid">
+        <div
+          v-for="group in fallbackTriggerConditionGroups"
+          :key="group.title"
+          class="fallback-trigger-card"
+        >
+          <div class="fallback-trigger-card-title">{{ group.title }}</div>
+          <div class="fallback-trigger-card-desc">{{ group.desc }}</div>
+          <div class="fallback-trigger-tags">
+            <span v-for="condition in group.conditions" :key="condition" class="fallback-trigger-tag">
+              {{ condition }}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="summary-grid">
       <div
         v-for="(item, index) in summaryCards"
@@ -758,6 +813,88 @@ onMounted(async () => {
   padding: 0 10px;
   color: #7d6446;
   font-weight: 600;
+}
+
+.fallback-trigger-panel {
+  margin-bottom: 16px;
+  padding: 16px;
+}
+
+.fallback-trigger-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.fallback-trigger-title {
+  color: #5d4526;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.fallback-trigger-desc {
+  margin-top: 6px;
+  color: #9a805b;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.fallback-trigger-badge {
+  flex: 0 0 auto;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(232, 244, 255, 0.96);
+  color: #2f73c7;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.fallback-trigger-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.fallback-trigger-card {
+  padding: 14px;
+  border: 1px solid rgba(240, 223, 190, 0.9);
+  border-radius: 14px;
+  background: rgba(255, 253, 248, 0.74);
+}
+
+.fallback-trigger-card-title {
+  color: #6a4d2a;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.fallback-trigger-card-desc {
+  margin-top: 6px;
+  color: #9a805b;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.fallback-trigger-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.fallback-trigger-tag {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: rgba(255, 246, 229, 0.96);
+  color: #8f6730;
+  font-size: 11px;
+  line-height: 1.35;
+  word-break: break-word;
 }
 
 .page-period-chip {

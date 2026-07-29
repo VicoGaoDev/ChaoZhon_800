@@ -166,6 +166,21 @@ def _is_upstream_disconnect_error(error_message: str) -> bool:
     return any(re.search(pattern, message, flags=re.IGNORECASE) for pattern in patterns)
 
 
+def _is_model_access_denied_error(error_message: str) -> bool:
+    message = (error_message or "").strip()
+    if not message:
+        return False
+    patterns = (
+        r"token\s+has\s+no\s+access\s+to\s*model",
+        r"no\s+access\s+to\s*model\s+[\w.-]+",
+        r"token.*no\s+access.*model",
+        r"无权访问.*模型",
+        r"没有.*权限.*模型",
+        r"没有.*访问.*模型",
+    )
+    return any(re.search(pattern, message, flags=re.IGNORECASE) for pattern in patterns)
+
+
 def _should_use_fallback_api(http_status: int | None, error_message: str) -> bool:
     if http_status is not None and int(http_status) in FALLBACK_HTTP_STATUSES:
         return True
@@ -174,6 +189,8 @@ def _should_use_fallback_api(http_status: int | None, error_message: str) -> boo
     if _is_image_pixel_limit_error(error_message):
         return True
     if _is_upstream_disconnect_error(error_message):
+        return True
+    if _is_model_access_denied_error(error_message):
         return True
     detected_status = _extract_fallback_http_status(error_message)
     return detected_status is not None
