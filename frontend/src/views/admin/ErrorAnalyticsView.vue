@@ -80,33 +80,14 @@ const columns = [
   { title: "错误次数", dataIndex: "count", width: 120 },
   { title: "错误类别", dataIndex: "error_category", width: 200 },
   { title: "错误信息", dataIndex: "error_message", width: 720 },
+  { title: "操作", key: "actions", width: 110, fixed: "right" as const },
 ];
 
 const fallbackTriggerConditionGroups = [
   {
-    title: "HTTP 状态",
-    desc: "主接口直接返回这些 HTTP 状态，或错误文案中能识别出这些状态码时调用备用接口。",
-    conditions: ["HTTP 502", "HTTP 503", "HTTP 504", "错误文案包含 502/503/504"],
-  },
-  {
-    title: "结果解析异常",
-    desc: "上游响应成功但缺少配置的结果图字段，也会尝试备用接口。",
-    conditions: ["缺少配置路径", "对应的 base64 数据"],
-  },
-  {
-    title: "图片限制超限",
-    desc: "主接口因输入图片像素、解码总量等图片限制失败时调用备用接口。",
-    conditions: ["图像像素数量超出限制", "图片像素数量超出限制", "像素数量超出限制", "image pixel count exceeds limit", "image pixels exceed limit", "decode images: images exceed total limit"],
-  },
-  {
-    title: "上游连接断开",
-    desc: "主接口连接被上游异常断开或协议层断连时调用备用接口。",
-    conditions: ["生图接口连接被上游异常断开", "upstream connection closed unexpectedly", "server disconnected without sending a response", "remote protocol error"],
-  },
-  {
-    title: "模型访问权限",
-    desc: "主接口 token 没有当前模型访问权限时调用备用接口。",
-    conditions: ["token has no access to model", "token has no access tomodel", "no access to model", "无权访问模型", "没有权限访问模型"],
+    title: "主接口任意失败",
+    desc: "只要主接口生成失败且当前场景绑定了备用接口，就会继续尝试备用接口，不再按错误类型筛选。",
+    conditions: ["HTTP 错误", "请求超时", "网络异常", "结果解析失败", "模型权限错误", "图片限制错误", "其他主接口失败"],
   },
 ];
 
@@ -428,6 +409,14 @@ function handleTrendChartClick(params: { seriesName?: string; dataIndex?: number
   load();
 }
 
+function handleViewErrorTasks(record: AdminErrorAnalytics["items"][number]) {
+  selectedErrorCategory.value = record.error_category;
+  selectedBucketLabel.value = undefined;
+  drilledDateRange.value = null;
+  taskTablePage.value = 1;
+  load();
+}
+
 function clearErrorCategoryFilter() {
   selectedErrorCategory.value = undefined;
   selectedBucketLabel.value = undefined;
@@ -582,7 +571,7 @@ onMounted(async () => {
         <div>
           <div class="fallback-trigger-title">备用接口触发条件</div>
           <div class="fallback-trigger-desc">
-            以下规则为静态记录，和图片生成 worker 的备用接口判断保持一致；命中后会尝试调用绑定的备用接口。
+            以下规则为静态记录，和图片生成 worker 的备用接口判断保持一致；主接口失败后会尝试调用绑定的备用接口。
           </div>
         </div>
         <span class="fallback-trigger-badge">图片任务</span>
@@ -679,7 +668,7 @@ onMounted(async () => {
         :loading="loading"
         :pagination="false"
         :row-key="getErrorRowKey"
-        :scroll="{ x: 1040 }"
+        :scroll="{ x: 1160 }"
       >
         <template #bodyCell="{ column, record }">
           <template v-if="column.dataIndex === 'count'">
@@ -691,6 +680,11 @@ onMounted(async () => {
           <template v-else-if="column.dataIndex === 'error_category'">
             <span class="category-badge">{{ record.error_category }}</span>
           </template>
+          <template v-else-if="column.key === 'actions'">
+            <a-button type="link" size="small" class="table-detail-btn" @click="handleViewErrorTasks(record)">
+              错误任务
+            </a-button>
+          </template>
         </template>
         <template #emptyText>
           <a-empty description="当前时间范围内暂无失败错误记录" />
@@ -701,7 +695,7 @@ onMounted(async () => {
     <div v-if="showTaskTable" class="warm-card warm-table-card motion-card-lift motion-fade-up" style="--motion-delay: 300ms">
       <div class="table-card-head">
         <div>
-          <div class="table-card-title">{{ fallbackOnly ? "备用接口任务情况" : "当天任务情况" }}</div>
+          <div class="table-card-title">{{ fallbackOnly ? "备用接口任务情况" : selectedErrorCategory ? "错误任务列表" : "当天任务情况" }}</div>
           <div class="table-card-desc">
             {{
               fallbackOnly

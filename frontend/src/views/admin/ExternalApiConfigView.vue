@@ -1381,7 +1381,7 @@ function copySecret(value: string, label: string) {
             v-model:value="sceneForm.backup_api_config_id"
             class="warm-select"
             allow-clear
-            placeholder="可选，主接口 502/503/504 或缺少配置路径结果时自动切换"
+            placeholder="可选，主接口生成失败时自动切换"
           >
             <a-select-option
               v-for="option in getBindingOptions()"

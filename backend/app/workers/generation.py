@@ -51,7 +51,6 @@ TASK_PROCESSING_LOCK_TIMEOUT_SECONDS = max(int(settings.AI_TIMEOUT or 0) + 600, 
 SINGLE_IMAGE_LOCK_TIMEOUT_SECONDS = max(int(settings.AI_TIMEOUT or 0) + 600, 900)
 SYNC_GENERATION_MAX_WORKERS = max(int(settings.SYNC_GENERATION_MAX_WORKERS or 0), 1)
 _sync_generation_semaphore = threading.BoundedSemaphore(SYNC_GENERATION_MAX_WORKERS)
-FALLBACK_HTTP_STATUSES = {502, 503, 504}
 
 
 @dataclass
@@ -110,92 +109,6 @@ def _format_elapsed_fragment(elapsed_seconds: float | None) -> str:
     if elapsed_seconds is None:
         return ""
     return f"（实际耗时 {elapsed_seconds} 秒）"
-
-
-def _extract_fallback_http_status(error_message: str) -> int | None:
-    message = (error_message or "").strip()
-    if not message:
-        return None
-    patterns = (
-        r"http\D*(5\d{2})",
-        r"status(?:\s*code)?\D*(5\d{2})",
-        r"状态(?:码)?\D*(5\d{2})",
-        r"(?:错误码|错误|error|code|码)\D{0,20}(5\d{2})",
-        r"(?<![\dxX])(5\d{2})(?![\dxX])\s*(?:bad gateway|internal server error|service unavailable|gateway timeout|server error)",
-    )
-    for pattern in patterns:
-        match = re.search(pattern, message, flags=re.IGNORECASE)
-        if not match:
-            continue
-        candidate = int(match.group(1))
-        if candidate in FALLBACK_HTTP_STATUSES:
-            return candidate
-    return None
-
-
-def _is_configured_image_path_missing_error(error_message: str) -> bool:
-    message = (error_message or "").strip()
-    return "生图接口返回内容缺少配置路径" in message and "对应的 base64 数据" in message
-
-
-def _is_image_limit_error(error_message: str) -> bool:
-    message = (error_message or "").strip()
-    if not message:
-        return False
-    patterns = (
-        r"图像像素数量超出限制",
-        r"图片像素数量超出限制",
-        r"像素数量超出限制",
-        r"image\s+pixel\s+count\s+exceeds?\s+(?:the\s+)?limit",
-        r"image\s+pixels?\s+exceeds?\s+(?:the\s+)?limit",
-        r"pixels?\s+exceeds?\s+(?:the\s+)?limit",
-        r"decode\s+images:\s+images\s+exceed\s+total\s+limit",
-        r"images\s+exceed\s+total\s+limit",
-    )
-    return any(re.search(pattern, message, flags=re.IGNORECASE) for pattern in patterns)
-
-
-def _is_upstream_disconnect_error(error_message: str) -> bool:
-    message = (error_message or "").strip()
-    if not message:
-        return False
-    patterns = (
-        r"生图接口连接被上游异常断开",
-        r"upstream\s+connection\s+closed\s+unexpectedly",
-        r"server\s+disconnected\s+without\s+sending\s+a\s+response",
-        r"remote\s+protocol\s+error",
-    )
-    return any(re.search(pattern, message, flags=re.IGNORECASE) for pattern in patterns)
-
-
-def _is_model_access_denied_error(error_message: str) -> bool:
-    message = (error_message or "").strip()
-    if not message:
-        return False
-    patterns = (
-        r"token\s+has\s+no\s+access\s+to\s*model",
-        r"no\s+access\s+to\s*model\s+[\w.-]+",
-        r"token.*no\s+access.*model",
-        r"无权访问.*模型",
-        r"没有.*权限.*模型",
-        r"没有.*访问.*模型",
-    )
-    return any(re.search(pattern, message, flags=re.IGNORECASE) for pattern in patterns)
-
-
-def _should_use_fallback_api(http_status: int | None, error_message: str) -> bool:
-    if http_status is not None and int(http_status) in FALLBACK_HTTP_STATUSES:
-        return True
-    if _is_configured_image_path_missing_error(error_message):
-        return True
-    if _is_image_limit_error(error_message):
-        return True
-    if _is_upstream_disconnect_error(error_message):
-        return True
-    if _is_model_access_denied_error(error_message):
-        return True
-    detected_status = _extract_fallback_http_status(error_message)
-    return detected_status is not None
 
 
 def _classify_generation_request_exception(
@@ -717,7 +630,7 @@ def _call_gemini_api(
 
             last_error_message = _clip_error_message(error_message or "生图失败")
             last_http_status = http_status_code
-            if is_fallback or backup_config is None or not _should_use_fallback_api(http_status_code, last_error_message):
+            if is_fallback or backup_config is None:
                 break
 
         return ApiCallResult(
