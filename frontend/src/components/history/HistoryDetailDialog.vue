@@ -21,12 +21,14 @@ const props = withDefaults(defineProps<{
   loading?: boolean;
   showActions?: boolean;
   showErrorMessage?: boolean;
+  requestPreviewLoading?: boolean;
   modelOptions?: Array<{ label: string; value: string }>;
   title?: string;
 }>(), {
   loading: false,
   showActions: false,
   showErrorMessage: false,
+  requestPreviewLoading: false,
   modelOptions: () => [],
   title: "任务详情",
 });
@@ -39,6 +41,7 @@ const emit = defineEmits<{
 
 const previewVisible = ref(false);
 const previewSrc = ref("");
+const requestPreviewActiveKeys = ref<string[]>([]);
 const failedResultAsset = withBaseUrl("failed-result.svg");
 const generateTaskCardAsset = withBaseUrl("generate-task-card.svg");
 const expiredResultAsset = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(`
@@ -63,6 +66,12 @@ const expiredResultAsset = `data:image/svg+xml;charset=UTF-8,${encodeURIComponen
 `)}`;
 
 const modelLabelMap = computed(() => new Map(props.modelOptions.map((item) => [item.value, item.label])));
+const requestPreviewAttempts = computed(() => (
+  (props.item?.api_attempts || []).filter((attempt) => attempt.request_preview)
+));
+const showRequestPreviewSection = computed(() => (
+  props.requestPreviewLoading || requestPreviewAttempts.value.length > 0
+));
 
 function formatTime(t: string) {
   return t ? dayjs(t).format("YYYY-MM-DD HH:mm:ss") : "-";
@@ -205,6 +214,42 @@ async function copyPrompt(text?: string) {
   }
 }
 
+function stringifyRequestPayload(payload: unknown) {
+  if (payload == null) return "{}";
+  try {
+    return JSON.stringify(payload, null, 2);
+  } catch {
+    return String(payload);
+  }
+}
+
+function stringifyRequestHeaders(headers?: Record<string, string>) {
+  return JSON.stringify(headers || {}, null, 2);
+}
+
+function shellQuote(value: string) {
+  return `'${String(value || "").replace(/'/g, "'\\''")}'`;
+}
+
+function buildRequestCurl(preview: NonNullable<TaskApiAttempt["request_preview"]>) {
+  const lines = [`curl ${preview.request_url || ""}`];
+  Object.entries(preview.headers || {}).forEach(([name, value]) => {
+    lines.push(`  -H ${shellQuote(`${name}: ${value}`)}`);
+  });
+  lines.push(`  -d ${shellQuote(stringifyRequestPayload(preview.payload))}`);
+  return lines.join(" \\\n");
+}
+
+async function copyRequestText(text: string, successMessage: string) {
+  if (!text.trim()) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    message.success(successMessage);
+  } catch {
+    message.error("复制失败，请重试");
+  }
+}
+
 function handleReedit(item: UserHistoryCard) {
   emit("reedit", item);
 }
@@ -321,6 +366,98 @@ function handleDownload(item: UserHistoryCard) {
             </div>
           </div>
 
+          <div v-if="showRequestPreviewSection" class="detail-section detail-request-preview-section">
+            <div class="detail-label-row detail-request-preview-title-row">
+              <div class="detail-label">接口调用参数</div>
+              <a-spin v-if="requestPreviewLoading" size="small" />
+            </div>
+            <div v-if="requestPreviewLoading" class="detail-request-loading">正在加载可复制的接口调用参数...</div>
+            <a-collapse
+              v-else
+              v-model:activeKey="requestPreviewActiveKeys"
+              ghost
+              class="detail-request-collapse"
+            >
+              <a-collapse-panel
+                v-for="attempt in requestPreviewAttempts"
+                :key="String(attempt.id || `${attempt.image_id || 0}-${attempt.attempt_index}`)"
+                :header="`${attemptTargetLabel(attempt)} · ${attemptRoleLabel(attempt)} · 第 ${attempt.attempt_index} 次尝试`"
+              >
+                <template v-if="attempt.request_preview">
+                  <div class="detail-request-preview">
+                    <div class="detail-request-preview-head">
+                      <span>{{ attempt.api_config_name || "绑定接口" }}</span>
+                    </div>
+                    <div class="detail-request-field">
+                      <div class="detail-request-field-head">
+                        <div class="detail-request-label">URL</div>
+                        <a-tooltip title="复制 URL">
+                          <a-button
+                            size="small"
+                            type="text"
+                            class="detail-request-copy-icon"
+                            @click="copyRequestText(attempt.request_preview.request_url || '', '已复制 URL')"
+                          >
+                            <template #icon><CopyOutlined /></template>
+                          </a-button>
+                        </a-tooltip>
+                      </div>
+                      <pre>{{ attempt.request_preview.request_url || "-" }}</pre>
+                    </div>
+                    <div class="detail-request-field">
+                      <div class="detail-request-field-head">
+                        <div class="detail-request-label">Header</div>
+                        <a-tooltip title="复制 Header">
+                          <a-button
+                            size="small"
+                            type="text"
+                            class="detail-request-copy-icon"
+                            @click="copyRequestText(stringifyRequestHeaders(attempt.request_preview.headers), '已复制 Header')"
+                          >
+                            <template #icon><CopyOutlined /></template>
+                          </a-button>
+                        </a-tooltip>
+                      </div>
+                      <pre>{{ stringifyRequestHeaders(attempt.request_preview.headers) }}</pre>
+                    </div>
+                    <div class="detail-request-field">
+                      <div class="detail-request-field-head">
+                        <div class="detail-request-label">参数 JSON</div>
+                        <a-tooltip title="复制参数 JSON">
+                          <a-button
+                            size="small"
+                            type="text"
+                            class="detail-request-copy-icon"
+                            @click="copyRequestText(stringifyRequestPayload(attempt.request_preview.payload), '已复制参数 JSON')"
+                          >
+                            <template #icon><CopyOutlined /></template>
+                          </a-button>
+                        </a-tooltip>
+                      </div>
+                      <pre>{{ stringifyRequestPayload(attempt.request_preview.payload) }}</pre>
+                    </div>
+                    <div class="detail-request-field">
+                      <div class="detail-request-field-head">
+                        <div class="detail-request-label">curl</div>
+                        <a-tooltip title="复制 curl">
+                          <a-button
+                            size="small"
+                            type="text"
+                            class="detail-request-copy-icon"
+                            @click="copyRequestText(buildRequestCurl(attempt.request_preview), '已复制 curl')"
+                          >
+                            <template #icon><CopyOutlined /></template>
+                          </a-button>
+                        </a-tooltip>
+                      </div>
+                      <pre>{{ buildRequestCurl(attempt.request_preview) }}</pre>
+                    </div>
+                  </div>
+                </template>
+              </a-collapse-panel>
+            </a-collapse>
+          </div>
+
           <div v-if="item.mode === 'inpaint' && item.source_image" class="detail-section">
             <div class="detail-label">局部重绘原图</div>
             <div class="detail-thumb-row">
@@ -425,6 +562,97 @@ function handleDownload(item: UserHistoryCard) {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.detail-request-preview-section {
+  margin-top: 18px;
+}
+
+.detail-request-preview-title-row {
+  align-items: center;
+}
+
+.detail-request-loading {
+  margin-top: 10px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.detail-request-collapse {
+  margin-top: 10px;
+  border-radius: 14px;
+  background: var(--theme-panel-bg-soft);
+  border: 1px solid var(--theme-panel-border);
+}
+
+.detail-request-collapse :deep(.ant-collapse-item) {
+  border-bottom: 1px solid var(--theme-panel-border);
+}
+
+.detail-request-collapse :deep(.ant-collapse-item:last-child) {
+  border-bottom: none;
+}
+
+.detail-request-collapse :deep(.ant-collapse-header) {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--theme-title) !important;
+}
+
+.detail-request-collapse :deep(.ant-collapse-content-box) {
+  padding-top: 4px !important;
+}
+
+.detail-request-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.detail-request-preview-head {
+  color: var(--theme-title);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.detail-request-field + .detail-request-field {
+  margin-top: 4px;
+}
+
+.detail-request-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.detail-request-label {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.detail-request-copy-icon {
+  color: var(--theme-link) !important;
+}
+
+.detail-request-copy-icon:hover {
+  color: var(--theme-link-hover, var(--theme-link)) !important;
+}
+
+.detail-request-field pre {
+  margin: 0;
+  padding: 12px 14px;
+  overflow: auto;
+  border-radius: 12px;
+  border: 1px solid var(--theme-panel-border);
+  background: var(--theme-panel-bg);
+  color: var(--theme-title);
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .detail-attempt-card {

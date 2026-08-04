@@ -1,5 +1,6 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime
+from typing import Any
 
 
 class HistoryImageOut(BaseModel):
@@ -16,6 +17,12 @@ class HistoryImageOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class TaskApiRequestPreviewOut(BaseModel):
+    request_url: str = ""
+    headers: dict[str, str] = Field(default_factory=dict)
+    payload: Any = None
+
+
 class TaskApiAttemptOut(BaseModel):
     id: int | None = None
     image_id: int | None = None
@@ -29,6 +36,7 @@ class TaskApiAttemptOut(BaseModel):
     error_message: str = ""
     duration_ms: int | None = None
     created_at: datetime | None = None
+    request_preview: TaskApiRequestPreviewOut | None = None
 
 
 class HistoryItem(BaseModel):

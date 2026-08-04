@@ -137,6 +137,11 @@ export interface TaskApiAttempt {
   error_message?: string;
   duration_ms?: number | null;
   created_at?: string | null;
+  request_preview?: {
+    request_url: string;
+    headers: Record<string, string>;
+    payload: unknown;
+  } | null;
 }
 
 export interface UserHistoryCard {

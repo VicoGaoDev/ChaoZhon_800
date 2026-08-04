@@ -26,6 +26,10 @@ import {
   updateExternalApiSceneBindingMeta,
   updateExternalApiSceneBindingStatus,
 } from "@/api/admin";
+import {
+  parseAdminConfigTemplate,
+  stringifyAdminConfigTemplate,
+} from "@/lib/adminConfigTemplate";
 import type {
   ExternalApiConfig,
   ExternalApiConfigPayload,
@@ -89,6 +93,8 @@ const secretVisible = ref(false);
 const tongyiSecretVisible = ref(false);
 const geminiKey = ref("");
 const tongyiKey = ref("");
+const configImportJson = ref("");
+const sceneImportJson = ref("");
 
 const configColumns = [
   { title: "名称", dataIndex: "name", width: 280 },
@@ -97,7 +103,7 @@ const configColumns = [
   { title: "请求地址", dataIndex: "request_url", ellipsis: true },
   { title: "状态", dataIndex: "status", width: 100 },
   { title: "更新时间", dataIndex: "updated_at", width: 180 },
-  { title: "操作", key: "action", width: 360 },
+  { title: "操作", key: "action", width: 460 },
 ];
 
 const bindingColumns = [
@@ -107,7 +113,7 @@ const bindingColumns = [
   { title: "主接口", key: "bind", width: 320 },
   { title: "备用接口", key: "backup", width: 320 },
   { title: "消耗积分", key: "credit", width: 180 },
-  { title: "操作", key: "action", width: 320 },
+  { title: "操作", key: "action", width: 420 },
 ];
 
 const form = reactive<ExternalApiConfigPayload>({
@@ -219,9 +225,35 @@ function matchesNameFilter(keyword: string, ...fields: Array<string | null | und
   return fields.some((field) => (field || "").toLowerCase().includes(normalized));
 }
 
+function normalizeStringValue(value: unknown, fallback = "") {
+  return typeof value === "string" ? value : (value == null ? fallback : String(value));
+}
+
+function normalizeNumberValue(value: unknown, fallback = 0) {
+  const normalized = Number(value);
+  return Number.isFinite(normalized) ? normalized : fallback;
+}
+
+function normalizeBooleanValue(value: unknown, fallback = false) {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function normalizeNullableNumberValue(value: unknown) {
+  if (value == null || value === "") return null;
+  const normalized = Number(value);
+  return Number.isFinite(normalized) ? normalized : null;
+}
+
+function normalizeJsonFieldValue(value: unknown, fallback: string) {
+  if (typeof value === "string" && value.trim()) return value;
+  if (value && typeof value === "object") return JSON.stringify(value, null, 2);
+  return fallback;
+}
+
 function resetForm() {
   editingId.value = null;
   isCopyMode.value = false;
+  configImportJson.value = "";
   form.name = "";
   form.description = "";
   form.group_name = "默认";
@@ -237,6 +269,7 @@ function resetForm() {
 function fillForm(item: ExternalApiConfig) {
   editingId.value = item.id;
   isCopyMode.value = false;
+  configImportJson.value = "";
   form.name = item.name;
   form.description = item.description || "";
   form.group_name = item.group_name || "默认";
@@ -274,6 +307,7 @@ function getBindingOptions() {
 
 function resetSceneForm() {
   isSceneCopyMode.value = false;
+  sceneImportJson.value = "";
   sceneForm.scene_key = "";
   sceneForm.scene_type = "generate";
   sceneForm.scene_label = "";
@@ -333,6 +367,7 @@ function canCopyScene(record: ExternalApiSceneBinding) {
 
 function fillSceneMetaForm(record: ExternalApiSceneBinding) {
   sceneEditingKey.value = record.scene_key;
+  sceneImportJson.value = "";
   sceneMetaForm.scene_key = record.scene_key;
   sceneMetaForm.scene_label = record.scene_label || "";
   sceneMetaForm.scene_description = record.scene_description || "";
@@ -526,6 +561,138 @@ function openCopy(item: ExternalApiConfig) {
   form.result_base64_field = item.result_base64_field || "";
   form.status = item.status;
   modalOpen.value = true;
+}
+
+function buildConfigTemplateData(item: ExternalApiConfig): ExternalApiConfigPayload {
+  return {
+    name: item.name,
+    description: item.description || "",
+    group_name: item.group_name || "默认",
+    request_url: item.request_url,
+    request_format: item.request_format || "json",
+    headers_json: item.headers_json,
+    payload_json: item.payload_json,
+    response_json: item.response_json || "{\n\n}",
+    result_base64_field: item.result_base64_field || "",
+    status: item.status,
+  };
+}
+
+function buildSceneTemplateData(record: ExternalApiSceneBinding): ExternalApiSceneBindingCreatePayload {
+  if (!isCopyableSceneType(record.scene_type)) {
+    throw new Error("当前场景类型暂不支持导出为新增模板");
+  }
+  return {
+    scene_key: record.scene_key,
+    scene_type: record.scene_type,
+    scene_label: record.scene_label,
+    scene_description: record.scene_description || "",
+    sort_order: Number(record.sort_order || 0),
+    hide_aspect_ratio: !!record.hide_aspect_ratio,
+    hide_resolution: !!record.hide_resolution,
+    hide_custom_size: !!record.hide_custom_size,
+    api_config_id: record.api_config_id ?? null,
+    backup_api_config_id: record.backup_api_config_id ?? null,
+    display_name: record.display_name || "",
+    subtitle: record.subtitle || "",
+    credit_cost: Number(record.credit_cost || 0),
+    max_reference_images: Number(record.max_reference_images || 0),
+    aspect_ratio_options_json: record.aspect_ratio_options_json || DEFAULT_ASPECT_RATIO_OPTIONS_JSON,
+    image_size_options_json: record.image_size_options_json || DEFAULT_IMAGE_SIZE_OPTIONS_JSON,
+    custom_size_options_json: record.custom_size_options_json || DEFAULT_CUSTOM_SIZE_OPTIONS_JSON,
+    resolution_mapping_json: record.resolution_mapping_json || DEFAULT_RESOLUTION_MAPPING_JSON,
+    resolution_credit_costs_json: record.resolution_credit_costs_json || DEFAULT_RESOLUTION_CREDIT_COSTS_JSON,
+  };
+}
+
+async function copyTemplateJson(text: string, successMessage: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+    message.success(successMessage);
+  } catch {
+    message.error("复制失败，请检查剪贴板权限");
+  }
+}
+
+function handleCopyConfigJson(item: ExternalApiConfig) {
+  const template = stringifyAdminConfigTemplate("image-api-config", buildConfigTemplateData(item));
+  void copyTemplateJson(template, "接口配置 JSON 已复制");
+}
+
+function handleCopySceneJson(record: ExternalApiSceneBinding) {
+  const template = stringifyAdminConfigTemplate("image-scene-binding", buildSceneTemplateData(record));
+  void copyTemplateJson(template, "场景绑定 JSON 已复制");
+}
+
+function applyImportedConfigData(data: Record<string, unknown>) {
+  form.name = normalizeStringValue(data.name, form.name);
+  form.description = normalizeStringValue(data.description, form.description);
+  form.group_name = normalizeStringValue(data.group_name, form.group_name || "默认");
+  form.request_url = normalizeStringValue(data.request_url, form.request_url);
+  form.request_format = data.request_format === "multipart" ? "multipart" : "json";
+  form.headers_json = normalizeJsonFieldValue(data.headers_json, form.headers_json);
+  form.payload_json = normalizeJsonFieldValue(data.payload_json, form.payload_json);
+  form.response_json = normalizeJsonFieldValue(data.response_json, form.response_json);
+  form.result_base64_field = normalizeStringValue(data.result_base64_field, form.result_base64_field);
+  form.status = data.status === "disabled" ? "disabled" : "enabled";
+}
+
+function handleApplyConfigImportJson() {
+  if (!configImportJson.value.trim()) {
+    message.warning("请先粘贴接口配置 JSON");
+    return;
+  }
+  try {
+    const parsed = parseAdminConfigTemplate(configImportJson.value);
+    if (parsed.kind !== "image-api-config") {
+      message.warning("这段 JSON 不是图片接口配置模板");
+      return;
+    }
+    applyImportedConfigData(parsed.data);
+    message.success("已识别并回填接口配置");
+  } catch (err: any) {
+    message.error(err?.message || "识别接口配置 JSON 失败");
+  }
+}
+
+function applyImportedSceneData(data: Record<string, unknown>) {
+  sceneForm.scene_key = normalizeStringValue(data.scene_key, sceneForm.scene_key);
+  sceneForm.scene_type = data.scene_type === "image_edit" ? "image_edit" : "generate";
+  sceneForm.scene_label = normalizeStringValue(data.scene_label, sceneForm.scene_label);
+  sceneForm.scene_description = normalizeStringValue(data.scene_description, sceneForm.scene_description);
+  sceneForm.sort_order = normalizeNumberValue(data.sort_order, sceneForm.sort_order);
+  sceneForm.hide_aspect_ratio = normalizeBooleanValue(data.hide_aspect_ratio, sceneForm.hide_aspect_ratio);
+  sceneForm.hide_resolution = normalizeBooleanValue(data.hide_resolution, sceneForm.hide_resolution);
+  sceneForm.hide_custom_size = normalizeBooleanValue(data.hide_custom_size, sceneForm.hide_custom_size);
+  sceneForm.api_config_id = normalizeNullableNumberValue(data.api_config_id);
+  sceneForm.backup_api_config_id = normalizeNullableNumberValue(data.backup_api_config_id);
+  sceneForm.display_name = normalizeStringValue(data.display_name, sceneForm.display_name);
+  sceneForm.subtitle = normalizeStringValue(data.subtitle, sceneForm.subtitle);
+  sceneForm.credit_cost = normalizeNumberValue(data.credit_cost, sceneForm.credit_cost);
+  sceneForm.max_reference_images = normalizeNumberValue(data.max_reference_images, sceneForm.max_reference_images);
+  sceneForm.aspect_ratio_options_json = normalizeJsonFieldValue(data.aspect_ratio_options_json, sceneForm.aspect_ratio_options_json);
+  sceneForm.image_size_options_json = normalizeJsonFieldValue(data.image_size_options_json, sceneForm.image_size_options_json);
+  sceneForm.custom_size_options_json = normalizeJsonFieldValue(data.custom_size_options_json, sceneForm.custom_size_options_json);
+  sceneForm.resolution_mapping_json = normalizeJsonFieldValue(data.resolution_mapping_json, sceneForm.resolution_mapping_json);
+  sceneForm.resolution_credit_costs_json = normalizeJsonFieldValue(data.resolution_credit_costs_json, sceneForm.resolution_credit_costs_json);
+}
+
+function handleApplySceneImportJson() {
+  if (!sceneImportJson.value.trim()) {
+    message.warning("请先粘贴场景绑定 JSON");
+    return;
+  }
+  try {
+    const parsed = parseAdminConfigTemplate(sceneImportJson.value);
+    if (parsed.kind !== "image-scene-binding") {
+      message.warning("这段 JSON 不是图片场景绑定模板");
+      return;
+    }
+    applyImportedSceneData(parsed.data);
+    message.success("已识别并回填场景绑定");
+  } catch (err: any) {
+    message.error(err?.message || "识别场景绑定 JSON 失败");
+  }
 }
 
 function validateJsonFields() {
@@ -997,9 +1164,10 @@ function copySecret(value: string, label: string) {
               </a-tag>
             </template>
             <template v-else-if="column.key === 'action'">
-              <a-space>
+              <a-space wrap>
                 <a-button size="small" class="api-secondary-btn" :icon="h(EditOutlined)" @click="openEdit(record)">编辑</a-button>
                 <a-button size="small" class="api-secondary-btn" :icon="h(CopyOutlined)" @click="openCopy(record)">复制新增</a-button>
+                <a-button size="small" class="api-secondary-btn" :icon="h(CopyOutlined)" @click="handleCopyConfigJson(record)">复制 JSON</a-button>
                 <a-button size="small" :class="record.status === 'enabled' ? 'api-danger-btn' : 'api-secondary-btn'" @click="handleToggleStatus(record)">
                   {{ record.status === "enabled" ? "停用" : "启用" }}
                 </a-button>
@@ -1189,6 +1357,9 @@ function copySecret(value: string, label: string) {
                 <a-button v-if="canCopyScene(record)" size="small" class="api-secondary-btn" :icon="h(CopyOutlined)" @click="openCopyScene(record)">
                   复制新增
                 </a-button>
+                <a-button v-if="canCopyScene(record)" size="small" class="api-secondary-btn" :icon="h(CopyOutlined)" @click="handleCopySceneJson(record)">
+                  复制 JSON
+                </a-button>
                 <a-button
                   v-if="!record.is_builtin"
                   size="small"
@@ -1311,6 +1482,18 @@ function copySecret(value: string, label: string) {
       @ok="handleCreateScene"
     >
       <a-form layout="vertical">
+        <a-form-item label="粘贴场景绑定 JSON 回填">
+          <a-textarea
+            v-model:value="sceneImportJson"
+            :rows="6"
+            allow-clear
+            class="warm-input"
+            placeholder="粘贴从“复制 JSON”得到的场景绑定模板，可自动识别并回填下面的字段"
+          />
+          <div style="display: flex; justify-content: flex-end; margin-top: 8px">
+            <a-button class="api-secondary-btn" @click="handleApplySceneImportJson">识别并回填</a-button>
+          </div>
+        </a-form-item>
         <a-row :gutter="16">
           <a-col :span="12">
             <a-form-item label="场景标识" required>
@@ -1503,6 +1686,18 @@ function copySecret(value: string, label: string) {
       @ok="handleSaveSceneMeta"
     >
       <a-form layout="vertical">
+        <a-form-item v-if="!editingId" label="粘贴接口配置 JSON 回填">
+          <a-textarea
+            v-model:value="configImportJson"
+            :rows="6"
+            allow-clear
+            class="warm-input"
+            placeholder="粘贴从“复制 JSON”得到的接口配置模板，可自动识别并回填下面的字段"
+          />
+          <div style="display: flex; justify-content: flex-end; margin-top: 8px">
+            <a-button class="api-secondary-btn" @click="handleApplyConfigImportJson">识别并回填</a-button>
+          </div>
+        </a-form-item>
         <a-row :gutter="16">
           <a-col :span="12">
             <a-form-item label="场景标识" required>

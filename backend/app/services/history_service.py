@@ -1,15 +1,31 @@
 import json
+import re
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session, selectinload
-from app.models.task import Task
-from app.models.image import Image
 from app.models.credit_log import CreditLog
-from app.models.prompt_history import PromptHistory
+from app.models.external_api_config import ExternalApiConfig
+from app.models.external_api_scene_binding import ExternalApiSceneBinding
 from app.models.history_pin import HistoryPin
+from app.models.image import Image
+from app.models.prompt_history import PromptHistory
+from app.models.task import Task
+from app.models.task_api_attempt import TaskApiAttempt
 from app.models.user import User
+from app.services.external_api_config_service import (
+    build_secret_variables,
+    render_config,
+    resolve_mapped_resolution,
+    resolve_scene_generation_configs,
+)
+from app.services.business_id_service import task_external_id, user_external_id
+from app.services.image_delivery_service import (
+    get_optional_cos_config,
+    serialize_asset_urls,
+    serialize_image,
+)
 from app.services.prompt_reverse_service import (
     PROMPT_REVERSE_CREDIT_LOG_DESCRIPTION,
     PROMPT_REVERSE_MODE,
@@ -23,12 +39,6 @@ from app.services.task_type_service import (
     get_task_scene_type_map,
     resolve_task_type_for_task,
 )
-from app.services.image_delivery_service import (
-    get_optional_cos_config,
-    serialize_asset_urls,
-    serialize_image,
-)
-from app.services.business_id_service import task_external_id, user_external_id
 from app.services.task_service import (
     ENQUEUE_FAILURE_DESCRIPTION,
     TASK_FAILURE_REFUND_DESCRIPTION,
@@ -93,6 +103,291 @@ def _serialize_history_images(
     return result
 
 
+BASE64_PLACEHOLDER = "<base64>"
+BASE64_IMAGE_PLACEHOLDER = "<base64 image>"
+BASE64_DATA_URL_PLACEHOLDER = "data:image/png;base64,<base64>"
+
+
+def _is_base64_like_text(value: str) -> bool:
+    text = (value or "").strip()
+    if not text:
+        return False
+    if text.startswith("data:") and ";base64," in text[:80]:
+        return True
+    if len(text) < 160:
+        return False
+    compact = re.sub(r"\s+", "", text)
+    return bool(compact) and len(compact) >= 160 and re.fullmatch(r"[A-Za-z0-9+/=]+", compact) is not None
+
+
+def _image_mime_from_data_url(value: str) -> str:
+    if not value.startswith("data:"):
+        return "image/png"
+    header = value.split(",", 1)[0]
+    return (header[5:].split(";", 1)[0] or "image/png").strip() or "image/png"
+
+
+def _base64_data_url_placeholder(value: str) -> str:
+    if value.startswith("data:"):
+        mime_type = _image_mime_from_data_url(value).replace(" ", "")
+        return f"data:{mime_type};base64,{BASE64_PLACEHOLDER}"
+    return BASE64_DATA_URL_PLACEHOLDER
+
+
+def _redact_payload_value(value: Any, key: str = "") -> Any:
+    normalized_key = key.lower()
+    if isinstance(value, dict):
+        return {item_key: _redact_payload_value(item_value, str(item_key)) for item_key, item_value in value.items()}
+    if isinstance(value, list):
+        return [_redact_payload_value(item) for item in value]
+    if isinstance(value, str):
+        if any(marker in normalized_key for marker in ("api_key", "apikey", "authorization", "token", "secret")):
+            return "xxx" if value else value
+        if normalized_key in {"data", "b64_json", "base64", "image_base64", "source_image_base64", "mask_image_base64"}:
+            return BASE64_PLACEHOLDER if value else value
+        if normalized_key.endswith("data_url") and _is_base64_like_text(value):
+            return _base64_data_url_placeholder(value)
+        if _is_base64_like_text(value):
+            return _base64_data_url_placeholder(value) if value.startswith("data:") else BASE64_PLACEHOLDER
+    return value
+
+
+def _redact_header_value(name: str, value: Any) -> str:
+    header_name = (name or "").strip()
+    header_value = str(value or "")
+    lowered_name = header_name.lower()
+    lowered_value = header_value.lower()
+    if lowered_name in {"authorization", "x-api-key", "api-key", "x-key", "key", "token", "x-token"}:
+        return "Bearer xxx" if lowered_value.startswith("bearer ") else "xxx"
+    if "authorization" in lowered_name or "token" in lowered_name or "secret" in lowered_name:
+        return "xxx"
+    if lowered_value.startswith("bearer "):
+        return "Bearer xxx"
+    return header_value
+
+
+def _public_image_url_or_placeholder(raw: str, *, cos_config) -> str:
+    value = (raw or "").strip()
+    if not value:
+        return ""
+    if _is_base64_like_text(value):
+        return BASE64_IMAGE_PLACEHOLDER
+    return serialize_asset_urls(value, cos_config=cos_config)["image_url"] or value
+
+
+def _inline_image_part_placeholder(raw: str) -> dict:
+    return {
+        "inlineData": {
+            "mimeType": _image_mime_from_data_url(raw),
+            "data": BASE64_PLACEHOLDER,
+        }
+    }
+
+
+def _build_task_render_variables(db: Session, task: Task, *, cos_config) -> dict[str, Any]:
+    mode = (task.mode or "generate").strip() or "generate"
+    scene_key = TASK_TYPE_INPAINT if mode == "inpaint" else (task.model or "")
+    mapped_resolution = resolve_mapped_resolution(db, scene_key, task.size or "", task.resolution or "")
+    parts: list[dict] = []
+    variables: dict[str, Any] = {
+        **build_secret_variables(db),
+        "prompt": task.prompt or "",
+        "aspect_ratio": task.size or "",
+        "image_size": task.resolution or "",
+        "custom_size": task.custom_size or "",
+        "mapped_resolution": mapped_resolution,
+        "generation_config": {},
+        "mode": mode,
+        "reference_image_count": 0,
+    }
+
+    if mode == "inpaint":
+        if task.source_image:
+            source_part = _inline_image_part_placeholder(task.source_image)
+            parts.append(source_part)
+            variables["source_image"] = source_part
+            variables["source_image_url"] = _public_image_url_or_placeholder(task.source_image, cos_config=cos_config)
+            variables["source_image_base64"] = BASE64_PLACEHOLDER
+            variables["source_image_mime_type"] = _image_mime_from_data_url(task.source_image)
+            variables["source_image_data_url"] = _base64_data_url_placeholder(task.source_image)
+        if task.mask_image:
+            mask_part = _inline_image_part_placeholder(task.mask_image)
+            parts.append(mask_part)
+            variables["mask_image"] = mask_part
+            variables["mask_image_base64"] = BASE64_PLACEHOLDER
+            variables["mask_image_mime_type"] = _image_mime_from_data_url(task.mask_image)
+            variables["mask_image_data_url"] = _base64_data_url_placeholder(task.mask_image)
+        parts.append({
+            "text": (
+                "请基于第1张原图进行局部重绘，第2张图是蒙版：白色区域需要重绘，"
+                "黑色区域必须保持原样。严格保留未遮罩区域的主体、构图、光影与细节。"
+                f"重绘要求：{task.prompt or ''}"
+            )
+        })
+    else:
+        reference_count = 0
+        for index, ref_url in enumerate(_parse_refs(task.reference_images), start=1):
+            inline_part = _inline_image_part_placeholder(ref_url)
+            parts.append(inline_part)
+            reference_count += 1
+            variables[f"reference_image_{index}"] = inline_part
+            variables[f"reference_image_{index}_url"] = _public_image_url_or_placeholder(ref_url, cos_config=cos_config)
+            variables[f"reference_image_{index}_base64"] = BASE64_PLACEHOLDER
+            variables[f"reference_image_{index}_mime_type"] = _image_mime_from_data_url(ref_url)
+            variables[f"reference_image_{index}_data_url"] = _base64_data_url_placeholder(ref_url)
+        variables["reference_image_count"] = reference_count
+        parts.append({"text": task.prompt or ""})
+
+    generation_config = {"responseModalities": ["IMAGE"]}
+    if mode != "inpaint":
+        generation_config["imageConfig"] = {"aspectRatio": task.size or ""}
+        if task.resolution:
+            generation_config["imageConfig"]["imageSize"] = task.resolution
+    variables["contents_parts"] = parts
+    variables["generation_config"] = generation_config
+    return variables
+
+
+def _render_request_preview(config: ExternalApiConfig, variables: dict[str, Any]) -> dict | None:
+    try:
+        rendered = render_config(config, variables)
+    except Exception:
+        return None
+    return {
+        "request_url": rendered.request_url,
+        "headers": {
+            str(name): _redact_header_value(str(name), value)
+            for name, value in (rendered.headers or {}).items()
+        },
+        "payload": _redact_payload_value(rendered.payload),
+    }
+
+
+def _resolve_task_bound_generation_configs(db: Session, task: Task) -> tuple[ExternalApiConfig | None, ExternalApiConfig | None]:
+    mode = (task.mode or "generate").strip() or "generate"
+    scene_key = TASK_TYPE_INPAINT if mode == "inpaint" else (task.model or "")
+    if not scene_key:
+        return None, None
+    try:
+        return resolve_scene_generation_configs(db, scene_key)
+    except Exception:
+        pass
+    candidates: list[str] = []
+    for item in (scene_key, scene_key.strip().lower()):
+        if item and item not in candidates:
+            candidates.append(item)
+    binding = (
+        db.query(ExternalApiSceneBinding)
+        .filter(
+            ExternalApiSceneBinding.scene_key.in_(candidates),
+            ExternalApiSceneBinding.is_deleted.is_(False),
+        )
+        .first()
+    )
+    if not binding:
+        return None, None
+    primary_config = (
+        db.query(ExternalApiConfig).filter(ExternalApiConfig.id == binding.api_config_id).first()
+        if binding.api_config_id
+        else None
+    )
+    backup_config = (
+        db.query(ExternalApiConfig).filter(ExternalApiConfig.id == binding.backup_api_config_id).first()
+        if binding.backup_api_config_id and binding.backup_api_config_id != binding.api_config_id
+        else None
+    )
+    return primary_config, backup_config
+
+
+def _build_admin_request_previews_for_attempts(
+    db: Session,
+    task: Task,
+    attempts: list[TaskApiAttempt],
+    *,
+    cos_config,
+) -> dict[int, dict]:
+    config_ids = sorted({int(attempt.api_config_id) for attempt in attempts if attempt.api_config_id})
+    config_names = sorted({(attempt.api_config_name or "").strip() for attempt in attempts if (attempt.api_config_name or "").strip()})
+    configs: dict[int, ExternalApiConfig] = {}
+    configs_by_name: dict[str, ExternalApiConfig] = {}
+    filters = []
+    if config_ids:
+        filters.append(ExternalApiConfig.id.in_(config_ids))
+    if config_names:
+        filters.append(ExternalApiConfig.name.in_(config_names))
+    if filters:
+        config_rows = db.query(ExternalApiConfig).filter(or_(*filters)).all()
+        configs = {int(config.id): config for config in config_rows}
+        for config in config_rows:
+            config_name = (config.name or "").strip()
+            if config_name and config_name not in configs_by_name:
+                configs_by_name[config_name] = config
+    variables = _build_task_render_variables(db, task, cos_config=cos_config)
+    preview_by_config_id: dict[int, dict] = {}
+    for config_id, config in configs.items():
+        preview = _render_request_preview(config, variables)
+        if preview:
+            preview_by_config_id[config_id] = preview
+    preview_by_config_name: dict[str, dict] = {}
+    for config_name, config in configs_by_name.items():
+        if int(config.id) in preview_by_config_id:
+            preview_by_config_name[config_name] = preview_by_config_id[int(config.id)]
+            continue
+        preview = _render_request_preview(config, variables)
+        if preview:
+            preview_by_config_name[config_name] = preview
+    bound_primary_config, bound_backup_config = _resolve_task_bound_generation_configs(db, task)
+    bound_primary_preview = _render_request_preview(bound_primary_config, variables) if bound_primary_config else None
+    bound_backup_preview = _render_request_preview(bound_backup_config, variables) if bound_backup_config else None
+
+    result: dict[int, dict] = {}
+    for attempt in attempts:
+        if not attempt.id:
+            continue
+        preview = bound_backup_preview if attempt.is_fallback and bound_backup_preview else bound_primary_preview
+        if not preview:
+            preview = (
+                preview_by_config_id.get(int(attempt.api_config_id or 0))
+                or preview_by_config_name.get((attempt.api_config_name or "").strip())
+            )
+        if preview:
+            result[int(attempt.id)] = preview
+    return result
+
+
+def _serialize_task_api_attempts(
+    attempts: list[TaskApiAttempt],
+    *,
+    request_previews: dict[int, dict] | None = None,
+) -> list[dict]:
+    serialized: list[dict] = []
+    preview_map = request_previews or {}
+    for attempt in sorted(
+        attempts,
+        key=lambda item: (
+            int(item.image_index or 0),
+            int(item.attempt_index or 1),
+            int(item.id or 0),
+        ),
+    ):
+        serialized.append({
+            "id": attempt.id,
+            "image_id": attempt.image_id,
+            "image_index": attempt.image_index,
+            "api_config_id": attempt.api_config_id,
+            "api_config_name": attempt.api_config_name or "",
+            "attempt_index": int(attempt.attempt_index or 1),
+            "is_fallback": bool(attempt.is_fallback),
+            "status": attempt.status or "failed",
+            "http_status": attempt.http_status,
+            "error_message": attempt.error_message or "",
+            "duration_ms": attempt.duration_ms,
+            "created_at": attempt.created_at,
+            "request_preview": preview_map.get(int(attempt.id or 0)),
+        })
+    return serialized
+
+
 def _get_refunded_task_ids(db: Session, task_ids: list[int]) -> set[int]:
     normalized_ids = [int(task_id) for task_id in task_ids if task_id]
     if not normalized_ids:
@@ -114,7 +409,13 @@ def _get_refunded_task_ids(db: Session, task_ids: list[int]) -> set[int]:
     }
 
 
-def _serialize_task_history_detail(task: Task, *, cos_config, scene_type_map: dict[str, str] | None = None) -> dict:
+def _serialize_task_history_detail(
+    task: Task,
+    *,
+    cos_config,
+    scene_type_map: dict[str, str] | None = None,
+    include_request_previews: bool = False,
+) -> dict:
     primary_image = next(
         (img for img in sorted(task.images, key=lambda item: item.id, reverse=True) if not img.is_deleted),
         None,
@@ -132,11 +433,22 @@ def _serialize_task_history_detail(task: Task, *, cos_config, scene_type_map: di
     mask_asset = serialize_asset_urls(task.mask_image or "", cos_config=cos_config)
     reference_assets = [serialize_asset_urls(ref, cos_config=cos_config) for ref in _parse_refs(task.reference_images)]
     visible_images = _serialize_history_images(task.images, cos_config=cos_config)
+    resolved_attempts = list(task.api_attempts or [])
     task_credit_cost = int(task.credit_cost or 0)
     credit_refunded = False
     if task.status == "failed" and task_credit_cost > 0:
         db = Session.object_session(task)
         credit_refunded = bool(db and is_task_generation_failure_credit_refunded(db, task.id))
+    request_previews: dict[int, dict] = {}
+    if include_request_previews and resolved_attempts:
+        db = Session.object_session(task)
+        if db:
+            request_previews = _build_admin_request_previews_for_attempts(
+                db,
+                task,
+                resolved_attempts,
+                cos_config=cos_config,
+            )
     return {
         "history_id": None,
         "item_type": "task",
@@ -176,6 +488,10 @@ def _serialize_task_history_detail(task: Task, *, cos_config, scene_type_map: di
         "created_at": task.created_at,
         "error_message": task.error_message or "",
         "images": visible_images,
+        "api_attempts": _serialize_task_api_attempts(
+            resolved_attempts,
+            request_previews=request_previews,
+        ),
     }
 
 
@@ -1142,7 +1458,7 @@ def get_admin_history_detail(
         task = (
             db.query(Task)
             .join(User, User.id == Task.user_id)
-            .options(selectinload(Task.images))
+            .options(selectinload(Task.images), selectinload(Task.api_attempts))
             .filter(
                 Task.business_id == normalized_task_id,
                 User.role != "superadmin",
@@ -1152,7 +1468,12 @@ def get_admin_history_detail(
         )
         if not task:
             raise LookupError("task_not_found")
-        return _serialize_task_history_detail(task, cos_config=cos_config, scene_type_map=scene_type_map)
+        return _serialize_task_history_detail(
+            task,
+            cos_config=cos_config,
+            scene_type_map=scene_type_map,
+            include_request_previews=True,
+        )
 
     if item_type == "prompt_history":
         if not isinstance(history_id, int):
