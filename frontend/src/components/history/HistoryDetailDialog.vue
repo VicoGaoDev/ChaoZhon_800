@@ -265,6 +265,7 @@ function handleDownload(item: UserHistoryCard) {
     :title="title"
     :footer="null"
     :width="1040"
+    wrap-class-name="history-detail-modal"
     centered
     @update:open="emit('update:open', $event)"
   >
@@ -420,7 +421,7 @@ function handleDownload(item: UserHistoryCard) {
                       </div>
                       <pre>{{ stringifyRequestHeaders(attempt.request_preview.headers) }}</pre>
                     </div>
-                    <div class="detail-request-field">
+                    <div class="detail-request-field detail-request-field-scroll">
                       <div class="detail-request-field-head">
                         <div class="detail-request-label">参数 JSON</div>
                         <a-tooltip title="复制参数 JSON">
@@ -436,7 +437,7 @@ function handleDownload(item: UserHistoryCard) {
                       </div>
                       <pre>{{ stringifyRequestPayload(attempt.request_preview.payload) }}</pre>
                     </div>
-                    <div class="detail-request-field">
+                    <div class="detail-request-field detail-request-field-scroll">
                       <div class="detail-request-field-head">
                         <div class="detail-request-label">curl</div>
                         <a-tooltip title="复制 curl">
@@ -533,6 +534,23 @@ function handleDownload(item: UserHistoryCard) {
 </template>
 
 <style scoped lang="scss">
+:global(.history-detail-modal .ant-modal) {
+  max-width: calc(100vw - 32px);
+}
+
+:global(.history-detail-modal .ant-modal-content) {
+  max-height: min(88vh, 920px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+:global(.history-detail-modal .ant-modal-body) {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .detail-loading {
   min-height: 280px;
   display: flex;
@@ -619,6 +637,11 @@ function handleDownload(item: UserHistoryCard) {
   margin-top: 4px;
 }
 
+.detail-request-field-scroll pre {
+  height: 220px;
+  max-height: 220px;
+}
+
 .detail-request-field-head {
   display: flex;
   align-items: center;
@@ -701,18 +724,29 @@ function handleDownload(item: UserHistoryCard) {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
   gap: 20px;
-  align-items: start;
+  align-items: stretch;
+  min-height: 0;
+  height: min(78vh, 760px);
   animation: history-detail-slide-in var(--motion-duration-reveal-slower) var(--motion-ease-enter) both;
 }
 
 .detail-left,
 .detail-right {
   min-width: 0;
+  min-height: 0;
+}
+
+.detail-left {
+  overflow: hidden;
 }
 
 .detail-right {
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
+  min-height: 0;
+  padding-right: 4px;
+  scrollbar-width: thin;
 }
 
 .detail-alert-list {
@@ -1028,6 +1062,7 @@ function handleDownload(item: UserHistoryCard) {
 @media (max-width: 900px) {
   .detail-layout {
     grid-template-columns: 1fr;
+    height: auto;
   }
 
   .detail-floating-actions {
@@ -1035,6 +1070,11 @@ function handleDownload(item: UserHistoryCard) {
     justify-content: flex-end;
     margin-top: 14px;
     padding: 0;
+  }
+
+  .detail-left,
+  .detail-right {
+    overflow: visible;
   }
 }
 </style>
