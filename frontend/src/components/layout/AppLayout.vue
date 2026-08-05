@@ -13,6 +13,7 @@ import {
   redeemCreditKey,
   validatePromoCode,
 } from "@/api/auth";
+import { validateInviteCode } from "@/api/inviteRewards";
 import { createPaymentOrder, listPaymentPlans } from "@/api/payments";
 import { createFeedback, getMyCompletedUnreadFeedbackCount } from "@/api/feedback";
 import { getAdminUnresolvedFeedbackCount } from "@/api/admin";
@@ -48,7 +49,6 @@ import {
   CloudUploadOutlined,
   LogoutOutlined,
   LockOutlined,
-  DownOutlined,
   UserOutlined,
   UserAddOutlined,
   ThunderboltOutlined,
@@ -58,6 +58,7 @@ import {
   GiftOutlined,
   AccountBookOutlined,
   CheckOutlined,
+  ShareAltOutlined,
 } from "@ant-design/icons-vue";
 
 const router = useRouter();
@@ -65,7 +66,7 @@ const route = useRoute();
 const auth = useAuthStore();
 const isAdmin = computed(() => auth.isAdmin);
 const isSuperAdmin = computed(() => auth.isSuperAdmin);
-const showRegisterPromoCode = false;
+const showRegisterPromoCode = true;
 const hideTopMenu = computed(() => route.meta.hideTopMenu === true);
 const mobileDrawerOpen = ref(false);
 const routeTransitionName = ref("route-page-forward");
@@ -83,22 +84,25 @@ const routeOrder = new Map<string, number>([
   ["/settings", 8],
   ["/credit-logs", 9],
   ["/promo-codes", 10],
-  ["/feedbacks", 11],
-  ["/feedbacks/:feedbackId", 12],
-  ["/admin/templates", 13],
-  ["/admin/users", 14],
-  ["/admin/user-tasks", 15],
-  ["/admin/dashboard", 16],
-  ["/admin/error-analytics", 17],
-  ["/admin/general-settings", 18],
-  ["/admin/redeem-keys", 19],
-  ["/admin/revenue", 20],
-  ["/admin/payment-orders", 21],
-  ["/admin/feedbacks", 22],
-  ["/admin/feedbacks/:feedbackId", 23],
-  ["/admin/system-messages", 24],
-  ["/admin/cos-config", 25],
-  ["/admin/external-api-configs", 26],
+  ["/invite-rewards", 11],
+  ["/feedbacks", 12],
+  ["/feedbacks/:feedbackId", 13],
+  ["/admin/templates", 14],
+  ["/admin/users", 15],
+  ["/admin/user-tasks", 16],
+  ["/admin/dashboard", 17],
+  ["/admin/error-analytics", 18],
+  ["/admin/general-settings", 19],
+  ["/admin/redeem-keys", 20],
+  ["/admin/revenue", 21],
+  ["/admin/invite-rewards", 22],
+  ["/admin/promo-stats", 23],
+  ["/admin/payment-orders", 24],
+  ["/admin/feedbacks", 25],
+  ["/admin/feedbacks/:feedbackId", 26],
+  ["/admin/system-messages", 27],
+  ["/admin/cos-config", 28],
+  ["/admin/external-api-configs", 29],
 ]);
 
 const currentTheme = ref<AppThemeName>(getCurrentTheme());
@@ -113,6 +117,7 @@ let systemMessagePollTimer: number | null = null;
 let unsubscribeAuthSessionExpired: (() => void) | null = null;
 const UNRESOLVED_FEEDBACK_NOTIFICATION_KEY = "global-admin-unresolved-feedback";
 const USER_UNREAD_SYSTEM_MESSAGE_NOTIFICATION_KEY = "global-user-unread-system-message";
+const INVITE_CODE_SESSION_KEY = "800ai.personalInviteCode";
 const notifiedUnreadSystemMessageIdsByUser = new Map<string, Set<string>>();
 
 const primaryMenuItems = [
@@ -138,6 +143,7 @@ const adminMenuItems = computed(() =>
     { key: "/admin/general-settings", label: "通用设置", icon: SettingOutlined, superAdminOnly: false },
     { key: "/admin/redeem-keys", label: "兑换码", icon: GiftOutlined, superAdminOnly: false },
     { key: "/admin/payment-orders", label: "购买订单", icon: AccountBookOutlined, superAdminOnly: false },
+    { key: "/admin/invite-rewards", label: "邀请奖励", icon: ShareAltOutlined, superAdminOnly: false },
     { key: "/admin/feedbacks", label: "用户反馈", icon: MessageOutlined, superAdminOnly: false },
     { key: "/admin/system-messages", label: "系统邮件", icon: MailOutlined, superAdminOnly: false },
     { key: "/admin/cos-config", label: "COS 配置", icon: CloudUploadOutlined, superAdminOnly: true },
@@ -155,7 +161,11 @@ const adminMenuBaseItems = computed(() =>
   ].includes(item.key))
 );
 const adminMenuBusinessItems = computed(() =>
-  adminMenuItems.value.filter((item) => ["/admin/redeem-keys", "/admin/payment-orders"].includes(item.key))
+  adminMenuItems.value.filter((item) => [
+    "/admin/redeem-keys",
+    "/admin/payment-orders",
+    "/admin/invite-rewards",
+  ].includes(item.key))
 );
 const adminMenuNoticeItems = computed(() =>
   adminMenuItems.value.filter((item) => ["/admin/feedbacks", "/admin/system-messages"].includes(item.key))
@@ -172,6 +182,7 @@ const hasUserUnreadNotice = computed(() => hasUserUnreadFeedback.value || hasUse
 const userMenuItems = computed(() => [
   { key: "profile", label: "个人主页", icon: UserOutlined, danger: false },
   { key: "credits", label: "积分明细", icon: ThunderboltOutlined, danger: false },
+  { key: "invite-rewards", label: "邀请奖励", icon: ShareAltOutlined, danger: false },
   ...(canManagePromoCodes.value ? [{ key: "promo-codes", label: "我的推广码", icon: GiftOutlined, danger: false }] : []),
   { key: "settings", label: "设置", icon: SettingOutlined, danger: false },
   { key: "my-feedback", label: "我的反馈", icon: MessageOutlined, danger: false },
@@ -179,7 +190,7 @@ const userMenuItems = computed(() => [
   { key: "logout", label: "退出登录", icon: LogoutOutlined, danger: true },
 ]);
 const userMenuAccountItems = computed(() =>
-  userMenuItems.value.filter((item) => ["profile", "credits", "promo-codes", "settings"].includes(item.key))
+  userMenuItems.value.filter((item) => ["profile", "credits", "invite-rewards", "promo-codes", "settings"].includes(item.key))
 );
 const userMenuNoticeItems = computed(() =>
   userMenuItems.value.filter((item) => ["my-feedback", "system-messages"].includes(item.key))
@@ -206,6 +217,7 @@ const selectedKeys = computed(() => {
     p === "/profile" ||
     p === "/settings" ||
     p === "/credit-logs" ||
+    p === "/invite-rewards" ||
     p === "/promo-codes" ||
     p === "/api-keys" ||
     p.startsWith("/feedbacks") ||
@@ -264,6 +276,7 @@ function handleUserMenu({ key }: { key: string }) {
   else if (key === "my-feedback") router.push("/feedbacks");
   else if (key === "settings") router.push("/settings");
   else if (key === "credits") router.push("/credit-logs");
+  else if (key === "invite-rewards") router.push("/invite-rewards");
   else if (key === "promo-codes") router.push("/promo-codes");
   else if (key === "api-keys") router.push("/api-keys");
   else if (key === "logout") {
@@ -273,6 +286,15 @@ function handleUserMenu({ key }: { key: string }) {
     stopSystemMessagePolling();
     router.push("/");
   }
+}
+
+function openInviteRewardsEntry() {
+  mobileDrawerOpen.value = false;
+  if (!auth.isLoggedIn) {
+    openAuthModal("login");
+    return;
+  }
+  router.push("/invite-rewards");
 }
 
 async function syncAdminUnresolvedFeedbackCount(options?: { showToast?: boolean }) {
@@ -417,10 +439,60 @@ function isValidEmail(email: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 }
 
+function normalizeInviteCode(code?: string | null) {
+  return (code || "").trim().toUpperCase().replace(/\s+/g, "");
+}
+
+function isPersonalInviteCodeValue(code?: string | null) {
+  return /^U[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{7}$/.test(normalizeInviteCode(code));
+}
+
+function getStoredInviteCode() {
+  try {
+    const code = normalizeInviteCode(sessionStorage.getItem(INVITE_CODE_SESSION_KEY));
+    return isPersonalInviteCodeValue(code) ? code : "";
+  } catch {
+    return "";
+  }
+}
+
+function clearStoredInviteCode() {
+  try {
+    sessionStorage.removeItem(INVITE_CODE_SESSION_KEY);
+  } catch {
+    // ignore storage errors
+  }
+}
+
+function applyStoredInviteCodeToRegisterForm() {
+  const storedCode = getStoredInviteCode();
+  if (storedCode && !registerForm.promoCode.trim()) {
+    registerForm.promoCode = storedCode;
+  }
+}
+
+function captureInviteCodeFromRoute() {
+  if (auth.isLoggedIn) return;
+  const rawInvite = Array.isArray(route.query.invite) ? route.query.invite[0] : route.query.invite;
+  const inviteCode = normalizeInviteCode(typeof rawInvite === "string" ? rawInvite : "");
+  if (!isPersonalInviteCodeValue(inviteCode)) return;
+  try {
+    sessionStorage.setItem(INVITE_CODE_SESSION_KEY, inviteCode);
+  } catch {
+    // ignore storage errors
+  }
+  if (authTab.value === "register" || loginModalVisible.value) {
+    registerForm.promoCode = inviteCode;
+  }
+}
+
 function openAuthModal(tab: "login" | "register") {
   mobileDrawerOpen.value = false;
   authTab.value = tab;
   loginModalVisible.value = true;
+  if (tab === "register") {
+    applyStoredInviteCodeToRegisterForm();
+  }
 }
 
 function openForgotPasswordDialog() {
@@ -452,6 +524,20 @@ function handleAuthSessionExpired(detail: { redirectPath: string }) {
 watch(loginModalVisible, (open) => {
   if (!open) {
     authExpiredPromptVisible.value = false;
+  }
+});
+
+watch(
+  () => route.query.invite,
+  () => {
+    captureInviteCodeFromRoute();
+  },
+  { immediate: true }
+);
+
+watch(authTab, (tab) => {
+  if (tab === "register") {
+    applyStoredInviteCodeToRegisterForm();
   }
 });
 
@@ -604,12 +690,17 @@ async function handleRegisterSubmit() {
     message.warning("两次密码不一致");
     return;
   }
-  const promoCode = showRegisterPromoCode ? registerForm.promoCode.trim() : "";
-  if (promoCode) {
+  const normalizedInviteOrPromoCode = normalizeInviteCode(showRegisterPromoCode ? registerForm.promoCode : "");
+  const isPersonalInviteRegistration = isPersonalInviteCodeValue(normalizedInviteOrPromoCode);
+  if (normalizedInviteOrPromoCode) {
     try {
-      await validatePromoCode(promoCode);
+      if (isPersonalInviteRegistration) {
+        await validateInviteCode(normalizedInviteOrPromoCode);
+      } else {
+        await validatePromoCode(normalizedInviteOrPromoCode);
+      }
     } catch (err: any) {
-      message.error(err.response?.data?.detail || err.message || "推广码无效");
+      message.error(err.response?.data?.detail || err.message || "邀请码无效");
       return;
     }
   }
@@ -628,18 +719,23 @@ async function handleRegisterSubmit() {
       registerForm.username.trim(),
       registerForm.email.trim(),
       registerForm.password,
-      promoCode || undefined,
+      normalizedInviteOrPromoCode || undefined,
     );
     auth.setAuth(res.token, res.user);
     message.success("注册成功");
-    if (promoCode) {
-      notification.success({
-        message: "赠送积分已到账",
-        description: "使用推广码注册额外奖励的 20 个积分已到账。",
-        placement: "topRight",
-        duration: 6,
-      });
+    if (isPersonalInviteRegistration) {
+      clearStoredInviteCode();
     }
+    notification.success({
+      message: "赠送积分已到账",
+      description: normalizedInviteOrPromoCode && !isPersonalInviteRegistration
+        ? "新用户注册试用积分和推广码额外奖励积分已到账。"
+        : isPersonalInviteRegistration
+          ? "新用户注册试用积分已到账，邀请关系已绑定。"
+          : "新用户注册试用积分已到账。",
+      placement: "topRight",
+      duration: 6,
+    });
     loginModalVisible.value = false;
     resetAuthForms();
     await nextTick();
@@ -964,13 +1060,14 @@ watch(purchaseDialogOpen, (open) => {
           <a-button type="text" class="top-link-btn" @click="openCreditsContact">
             联系我们
           </a-button>
+          <a-button type="text" class="top-link-btn" @click="openInviteRewardsEntry">
+            邀请奖励
+          </a-button>
           <div v-if="auth.isLoggedIn && isAdmin" class="desktop-admin-entry">
             <a-dropdown :trigger="['hover']" overlay-class-name="warm-dropdown">
               <a-badge :count="adminUnresolvedFeedbackCount" :offset="[-2, 2]" :show-zero="false">
-                <a-button class="admin-btn" type="text">
-                  <SettingOutlined />
-                  管理后台
-                  <DownOutlined style="font-size: 10px; margin-left: 4px" />
+                <a-button class="admin-btn" type="text" shape="circle" aria-label="admin-menu">
+                  <template #icon><SettingOutlined /></template>
                 </a-button>
               </a-badge>
               <template #overlay>
@@ -1219,8 +1316,8 @@ watch(purchaseDialogOpen, (open) => {
         </div>
 
         <div v-if="auth.isLoggedIn && isAdmin" class="mobile-drawer-section">
-          <div class="mobile-drawer-section-title">
-            <span>管理后台</span>
+          <div class="mobile-drawer-section-title mobile-admin-section-title">
+            <SettingOutlined />
             <a-badge
               v-if="hasAdminUnresolvedFeedback"
               :count="adminUnresolvedFeedbackCount"
@@ -1622,7 +1719,7 @@ watch(purchaseDialogOpen, (open) => {
               <a-input
                 v-model:value="registerForm.promoCode"
                 size="large"
-                placeholder="填写邀请码，可额外获得 20 积分"
+                placeholder="填写邀请码或推广码（选填）"
                 :maxlength="32"
               />
             </a-form-item>
@@ -2139,15 +2236,16 @@ html:is([data-theme="dark"], [data-theme="midnight"]) .warm-dropdown .ant-dropdo
 
 .admin-btn {
   height: 40px;
-  padding-inline: 14px;
-  border-radius: 999px;
+  width: 40px;
+  padding-inline: 0;
+  border-radius: 50%;
   border: 1px solid var(--theme-panel-border-strong) !important;
   background: linear-gradient(180deg, var(--theme-panel-bg), var(--theme-panel-bg-strong)) !important;
   color: var(--theme-accent-text) !important;
   font-weight: 700;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
   box-shadow: 0 10px 22px var(--theme-card-shadow);
 
   &:hover {
@@ -3059,7 +3157,8 @@ html:is([data-theme="dark"], [data-theme="midnight"]) .warm-dropdown .ant-dropdo
   }
 
   .admin-btn {
-    padding-inline: 12px;
+    width: 38px;
+    height: 38px;
   }
 
   .app-content {

@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.models.payment_order import PaymentOrder
 from app.models.user import User
+from app.services.referral_reward_service import REFERRAL_SOURCE_PAYMENT, apply_referral_reward_safely
 from app.services.user_credit_service import change_user_credit_balance, get_user_credit_account
 from app.services.wecom_notify_service import send_wecom_markdown
 from app.utils.datetime_utils import now_local
@@ -716,6 +717,13 @@ def process_alipay_notification(
         order.credited_at = now_local()
         db.add(order)
         db.flush()
+        apply_referral_reward_safely(
+            db,
+            invitee_id=order.user_id,
+            source_type=REFERRAL_SOURCE_PAYMENT,
+            source_id=order.order_no,
+            source_credits=int(order.credits or 0),
+        )
         _send_payment_success_notification(db, order)
         return order
 

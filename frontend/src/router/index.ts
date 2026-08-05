@@ -52,6 +52,12 @@ const router = createRouter({
           component: () => import("@/views/PromoCodesView.vue"),
         },
         {
+          path: "invite-rewards",
+          name: "InviteRewards",
+          meta: { requiresAuth: true },
+          component: () => import("@/views/InviteRewardsView.vue"),
+        },
+        {
           path: "payment-result",
           name: "PaymentResult",
           meta: { requiresAuth: true },
@@ -128,6 +134,18 @@ const router = createRouter({
           name: "AdminRevenue",
           meta: { requiresAdmin: true },
           component: () => import("@/views/admin/RevenueView.vue"),
+        },
+        {
+          path: "admin/invite-rewards",
+          name: "AdminInviteRewards",
+          meta: { requiresAdmin: true },
+          component: () => import("@/views/admin/InviteRewardStatsView.vue"),
+        },
+        {
+          path: "admin/promo-stats",
+          name: "AdminPromoStats",
+          meta: { requiresAdmin: true },
+          component: () => import("@/views/admin/PromoStatsView.vue"),
         },
         {
           path: "admin/payment-orders",

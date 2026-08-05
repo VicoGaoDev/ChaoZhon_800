@@ -31,6 +31,12 @@ from app.services.admin_service import (
 )
 from app.services.credit_redeem_service import create_redeem_key_batch, list_redeem_keys, update_redeem_key_status
 from app.services.promo_service import get_user_promo_dashboard_for_admin
+from app.services.referral_reward_service import (
+    get_admin_invite_reward_dashboard as build_admin_invite_reward_dashboard,
+    get_admin_invite_reward_user_detail as build_admin_invite_reward_user_detail,
+    get_admin_promo_stats_dashboard as build_admin_promo_stats_dashboard,
+    get_admin_promo_stats_user_detail as build_admin_promo_stats_user_detail,
+)
 from app.services.feedback_service import (
     count_unresolved_feedbacks,
     get_feedback_detail,
@@ -244,6 +250,40 @@ def admin_stats(
     db: Session = Depends(get_db),
 ):
     return get_stats(db)
+
+
+@router.get("/invite-rewards", response_model=dict)
+def admin_invite_rewards(
+    _user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    return build_admin_invite_reward_dashboard(db)
+
+
+@router.get("/invite-rewards/users/{user_id}", response_model=dict)
+def admin_invite_reward_user_detail(
+    user_id: str,
+    _user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    return build_admin_invite_reward_user_detail(db, user_id)
+
+
+@router.get("/promo-stats", response_model=dict)
+def admin_promo_stats(
+    _user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    return build_admin_promo_stats_dashboard(db)
+
+
+@router.get("/promo-stats/users/{user_id}", response_model=dict)
+def admin_promo_stats_user_detail(
+    user_id: str,
+    _user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    return build_admin_promo_stats_user_detail(db, user_id)
 
 
 @router.get("/analytics/summary", response_model=AnalyticsSummaryOut)

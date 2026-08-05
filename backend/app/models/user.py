@@ -18,6 +18,7 @@ class User(Base):
     status = Column(String(10), default="active")
     is_whitelisted = Column(Boolean, default=False, nullable=False, server_default="0")
     remark = Column(String(500), default="", nullable=False, server_default="")
+    invite_code = Column(String(16), unique=True, nullable=True, index=True)
     referrer_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     used_promo_code_id = Column(Integer, nullable=True, index=True)
     created_at = Column(DateTime, server_default=func.now())

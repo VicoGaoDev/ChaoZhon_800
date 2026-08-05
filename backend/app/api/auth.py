@@ -26,6 +26,9 @@ from app.schemas.auth import (
     PromoReferralListResponse,
     PromoReferralActivityListResponse,
     PromoCodeValidationResponse,
+    InviteRewardOverviewResponse,
+    InviteRewardReferralListResponse,
+    InviteRewardLogListResponse,
 )
 from app.services.business_id_service import get_user_by_business_id, user_external_id
 from app.services.auth_service import (
@@ -42,6 +45,14 @@ from app.services.promo_service import (
     get_my_promo_referral_activities,
     get_valid_promo_code,
     update_promo_code_platform,
+)
+from app.services.referral_reward_service import (
+    get_invite_reward_overview,
+    get_user_by_invite_code,
+    is_personal_invite_code,
+    list_invite_reward_logs,
+    list_invite_reward_referrals,
+    normalize_invite_code,
 )
 from app.services.credit_redeem_service import redeem_credit_key
 from app.models.prompt_history import PromptHistory
@@ -257,13 +268,60 @@ def list_my_promo_referral_activities(
     )
 
 
+def _validate_registration_invite_code(db: Session, code: str) -> PromoCodeValidationResponse:
+    normalized_code = normalize_invite_code(code)
+    if is_personal_invite_code(normalized_code):
+        invite_owner = get_user_by_invite_code(db, normalized_code)
+        if invite_owner:
+            return PromoCodeValidationResponse(valid=True, code=normalized_code, platform_name="个人邀请")
+    promo = get_valid_promo_code(db, normalized_code)
+    return PromoCodeValidationResponse(valid=True, code=promo.code, platform_name=promo.platform_name)
+
+
 @router.get("/promo-codes/validate", response_model=PromoCodeValidationResponse)
 def validate_promo_code(
     code: str = Query(..., min_length=1),
     db: Session = Depends(get_db),
 ):
-    promo = get_valid_promo_code(db, code)
-    return PromoCodeValidationResponse(valid=True, code=promo.code, platform_name=promo.platform_name)
+    return _validate_registration_invite_code(db, code)
+
+
+@router.get("/invite-codes/validate", response_model=PromoCodeValidationResponse)
+def validate_invite_code(
+    code: str = Query(..., min_length=1),
+    db: Session = Depends(get_db),
+):
+    return _validate_registration_invite_code(db, code)
+
+
+@router.get("/invite-rewards/me", response_model=InviteRewardOverviewResponse)
+def get_my_invite_reward_overview(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    base_url = (request.headers.get("origin") or "").strip()
+    if not base_url:
+        base_url = f"{request.url.scheme}://{request.url.netloc}"
+    payload = get_invite_reward_overview(db, user, base_url=base_url)
+    db.commit()
+    return payload
+
+
+@router.get("/invite-rewards/referrals", response_model=InviteRewardReferralListResponse)
+def get_my_invite_reward_referrals(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return list_invite_reward_referrals(db, user)
+
+
+@router.get("/invite-rewards/logs", response_model=InviteRewardLogListResponse)
+def get_my_invite_reward_logs(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return list_invite_reward_logs(db, user)
 
 
 @router.get("/credit-logs")

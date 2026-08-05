@@ -7,6 +7,12 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.models.user import User
 from app.services.promo_service import PROMO_CODE_REWARD_CREDITS, get_valid_promo_code
+from app.services.referral_reward_service import (
+    generate_unique_invite_code,
+    get_user_by_invite_code,
+    is_personal_invite_code,
+    normalize_invite_code,
+)
 from app.services.business_id_service import user_external_id
 from app.services.user_credit_service import change_user_credit_balance
 from app.utils.security import create_access_token, hash_password, verify_password
@@ -51,7 +57,19 @@ def register_user(
     if existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="邮箱已注册")
 
-    promo = get_valid_promo_code(db, promo_code) if promo_code else None
+    normalized_invite_code = normalize_invite_code(promo_code)
+    promo = None
+    personal_referrer = None
+    if normalized_invite_code:
+        if is_personal_invite_code(normalized_invite_code):
+            personal_referrer = get_user_by_invite_code(db, normalized_invite_code)
+            if not personal_referrer:
+                promo = get_valid_promo_code(db, normalized_invite_code)
+        else:
+            promo = get_valid_promo_code(db, normalized_invite_code)
+    referrer_id = personal_referrer.id if personal_referrer else (promo.user_id if promo else None)
+    if personal_referrer and (personal_referrer.email or "").strip().lower() == normalized_email:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="不能使用自己的邀请码注册")
 
     user = User(
         username=normalized_username,
@@ -60,7 +78,8 @@ def register_user(
         password_hash=hash_password(password),
         role="user",
         status="active",
-        referrer_id=promo.user_id if promo else None,
+        invite_code=generate_unique_invite_code(db),
+        referrer_id=referrer_id,
         used_promo_code_id=promo.id if promo else None,
     )
     db.add(user)

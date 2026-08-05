@@ -497,6 +497,186 @@ export interface PromoReferralActivityListResponse {
   items: PromoReferralActivityItem[];
 }
 
+export interface InviteRewardSummary {
+  total_referrals: number;
+  today_referrals: number;
+  rewarded_invitees: number;
+  reward_grant_count: number;
+  total_reward_credits: number;
+  today_reward_credits: number;
+}
+
+export interface InviteRewardOverviewResponse {
+  invite_code: string;
+  invite_link: string;
+  reward_rate: number;
+  max_reward_count: number;
+  summary: InviteRewardSummary;
+}
+
+export interface InviteRewardReferralItem {
+  user_id: string;
+  username: string;
+  email_masked: string;
+  reward_count: number;
+  total_reward_credits: number;
+  last_reward_at?: string | null;
+  registered_at?: string | null;
+}
+
+export interface InviteRewardReferralListResponse {
+  total: number;
+  items: InviteRewardReferralItem[];
+}
+
+export interface InviteRewardLogItem {
+  id: number;
+  invitee_user_id: string;
+  invitee_username: string;
+  invitee_email_masked: string;
+  source_type: "payment" | "redeem" | string;
+  source_id: string;
+  source_credits: number;
+  reward_rate: number;
+  reward_credits: number;
+  reward_index: number;
+  created_at?: string | null;
+}
+
+export interface InviteRewardLogListResponse {
+  total: number;
+  items: InviteRewardLogItem[];
+}
+
+export interface AdminInviteRewardSummary {
+  total_referrals: number;
+  rewarded_referrers: number;
+  rewarded_invitees: number;
+  reward_grant_count: number;
+  source_credits: number;
+  reward_credits: number;
+  payment_reward_count: number;
+  redeem_reward_count: number;
+}
+
+export interface AdminInviteRewardUserItem {
+  user_id: string;
+  username: string;
+  email: string;
+  invite_code: string;
+  total_referrals: number;
+  rewarded_invitees: number;
+  reward_grant_count: number;
+  source_credits: number;
+  reward_credits: number;
+  last_reward_at?: string | null;
+  created_at?: string | null;
+}
+
+export interface AdminInviteRewardLogItem {
+  id: number;
+  referrer_user_id: string;
+  referrer_username: string;
+  invitee_user_id: string;
+  invitee_username: string;
+  source_type: "payment" | "redeem" | string;
+  source_id: string;
+  source_credits: number;
+  reward_rate: number;
+  reward_credits: number;
+  reward_index: number;
+  created_at?: string | null;
+}
+
+export interface AdminInviteRewardDashboard {
+  summary: AdminInviteRewardSummary;
+  users: AdminInviteRewardUserItem[];
+  recent_logs: AdminInviteRewardLogItem[];
+}
+
+export interface AdminInviteRewardDetailReferralItem {
+  user_id: string;
+  username: string;
+  email: string;
+  reward_count: number;
+  reward_credits: number;
+  last_reward_at?: string | null;
+  registered_at?: string | null;
+}
+
+export interface AdminInviteRewardDetailLogItem {
+  id: number;
+  invitee_user_id: string;
+  invitee_username: string;
+  invitee_email: string;
+  source_type: "payment" | "redeem" | string;
+  source_id: string;
+  source_credits: number;
+  reward_rate: number;
+  reward_credits: number;
+  reward_index: number;
+  created_at?: string | null;
+}
+
+export interface AdminInviteRewardUserDetail {
+  user: {
+    user_id: string;
+    username: string;
+    email: string;
+    invite_code: string;
+    created_at?: string | null;
+  };
+  summary: Pick<AdminInviteRewardSummary, "total_referrals" | "rewarded_invitees" | "reward_grant_count" | "source_credits" | "reward_credits">;
+  referrals: AdminInviteRewardDetailReferralItem[];
+  reward_logs: AdminInviteRewardDetailLogItem[];
+}
+
+export interface AdminPromoStatsSummary {
+  total_referrals: number;
+  active_promoters: number;
+  total_promo_codes: number;
+  used_promo_codes: number;
+  whitelisted_users: number;
+  reward_credits: number;
+  purchase_count: number;
+  purchase_credits: number;
+  redeem_count: number;
+  redeem_credits: number;
+}
+
+export interface AdminPromoStatsUserItem {
+  user_id: string;
+  username: string;
+  email: string;
+  is_whitelisted: boolean;
+  promo_code_count: number;
+  used_code_count: number;
+  total_referrals: number;
+  reward_credits: number;
+  purchase_credits: number;
+  redeem_credits: number;
+  last_referral_at?: string | null;
+  created_at?: string | null;
+}
+
+export interface AdminPromoStatsReferralItem {
+  id: number;
+  promoter_user_id: string;
+  promoter_username: string;
+  invitee_user_id: string;
+  invitee_username: string;
+  promo_code: string;
+  platform_name: string;
+  reward_credits: number;
+  registered_at?: string | null;
+}
+
+export interface AdminPromoStatsDashboard {
+  summary: AdminPromoStatsSummary;
+  users: AdminPromoStatsUserItem[];
+  recent_referrals: AdminPromoStatsReferralItem[];
+}
+
 export interface AdminRedeemKey {
   id: number;
   redeem_key: string;

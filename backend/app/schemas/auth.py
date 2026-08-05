@@ -127,3 +127,54 @@ class PromoCodeValidationResponse(BaseModel):
     valid: bool
     code: str = ""
     platform_name: str = ""
+
+
+class InviteRewardSummary(BaseModel):
+    total_referrals: int = 0
+    today_referrals: int = 0
+    rewarded_invitees: int = 0
+    reward_grant_count: int = 0
+    total_reward_credits: int = 0
+    today_reward_credits: int = 0
+
+
+class InviteRewardOverviewResponse(BaseModel):
+    invite_code: str
+    invite_link: str
+    reward_rate: int = 15
+    max_reward_count: int = 3
+    summary: InviteRewardSummary
+
+
+class InviteRewardReferralItem(BaseModel):
+    user_id: str
+    username: str
+    email_masked: str = "-"
+    reward_count: int = 0
+    total_reward_credits: int = 0
+    last_reward_at: datetime | None = None
+    registered_at: datetime | None = None
+
+
+class InviteRewardReferralListResponse(BaseModel):
+    total: int
+    items: list[InviteRewardReferralItem]
+
+
+class InviteRewardLogItem(BaseModel):
+    id: int
+    invitee_user_id: str
+    invitee_username: str
+    invitee_email_masked: str = "-"
+    source_type: str
+    source_id: str
+    source_credits: int = 0
+    reward_rate: int = 15
+    reward_credits: int = 0
+    reward_index: int = 0
+    created_at: datetime | None = None
+
+
+class InviteRewardLogListResponse(BaseModel):
+    total: int
+    items: list[InviteRewardLogItem]

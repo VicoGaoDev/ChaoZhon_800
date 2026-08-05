@@ -97,6 +97,8 @@ def on_startup():
         _ensure_user_remark_column()
         _ensure_user_referral_schema()
         _ensure_user_promo_code_schema()
+        _ensure_invite_reward_schema()
+        _backfill_invite_codes()
         _ensure_user_identity_schema()
         _ensure_business_id_schema()
         _ensure_prompt_history_columns()
@@ -1228,6 +1230,72 @@ def _ensure_scene_binding_required_columns():
                 """
             )
         )
+
+
+def _ensure_invite_reward_schema():
+    inspector = inspect(engine)
+    table_names = set(inspector.get_table_names())
+    if "users" not in table_names:
+        return
+
+    user_columns = {col["name"] for col in inspector.get_columns("users")}
+    user_indexes = {idx["name"] for idx in inspector.get_indexes("users")}
+    with engine.begin() as conn:
+        if "invite_code" not in user_columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN invite_code VARCHAR(16) NULL AFTER remark"))
+        if "ux_users_invite_code" not in user_indexes:
+            conn.execute(text("CREATE UNIQUE INDEX ux_users_invite_code ON users (invite_code)"))
+
+    if "referral_reward_grants" in table_names:
+        return
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE referral_reward_grants (
+                    id INTEGER NOT NULL AUTO_INCREMENT,
+                    referrer_id INTEGER NOT NULL,
+                    invitee_id INTEGER NOT NULL,
+                    source_type VARCHAR(20) NOT NULL,
+                    source_id VARCHAR(64) NOT NULL,
+                    source_credits INTEGER NOT NULL DEFAULT 0,
+                    reward_rate INTEGER NOT NULL DEFAULT 15,
+                    reward_credits INTEGER NOT NULL DEFAULT 0,
+                    reward_index INTEGER NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (id),
+                    INDEX ix_referral_reward_grants_referrer_id (referrer_id),
+                    INDEX ix_referral_reward_grants_invitee_id (invitee_id),
+                    INDEX ix_referral_reward_grants_source_type (source_type),
+                    INDEX ix_referral_reward_grants_source_id (source_id),
+                    UNIQUE KEY ux_referral_reward_source (source_type, source_id, referrer_id),
+                    UNIQUE KEY ux_referral_reward_index (referrer_id, invitee_id, reward_index),
+                    CONSTRAINT fk_referral_reward_referrer_id FOREIGN KEY (referrer_id) REFERENCES users (id),
+                    CONSTRAINT fk_referral_reward_invitee_id FOREIGN KEY (invitee_id) REFERENCES users (id)
+                )
+                """
+            )
+        )
+
+
+def _backfill_invite_codes():
+    inspector = inspect(engine)
+    if "users" not in inspector.get_table_names():
+        return
+
+    from app.database import SessionLocal
+    from app.services.referral_reward_service import backfill_user_invite_codes
+
+    db = SessionLocal()
+    try:
+        changed = backfill_user_invite_codes(db)
+        if changed:
+            db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 
 def _ensure_feedback_schema():
