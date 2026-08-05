@@ -27,7 +27,8 @@
 - `role`: 角色，常见值为 `user`、`admin`、`superadmin`。
 - `status`: 账号状态，常见值为 `active`、`disabled`。
 - `is_whitelisted`: 是否白名单用户。
-- `referrer_id`: 推荐人内部用户 ID；当新用户使用推广码注册时写入。
+- `invite_code`: 个人固定邀请码，格式为 `Uxxxxxxx`，用于普通用户邀请奖励计划。
+- `referrer_id`: 推荐人内部用户 ID；当新用户使用个人邀请码或推广码注册时写入。
 - `used_promo_code_id`: 注册时使用的推广码记录 ID；可用于追踪具体渠道来源。
 - `created_at` / `updated_at`: 用户创建时间、最后更新时间。
 
@@ -39,6 +40,17 @@
 - `platform_name`: 推广渠道/平台名称，用于区分来源。
 - `status`: 推广码状态，当前常见值为 `enabled`、`disabled`。
 - `created_at` / `updated_at`: 创建时间、最后更新时间。
+
+### `referral_reward_grants`
+
+- `referrer_id`: 获得邀请奖励的邀请人。
+- `invitee_id`: 触发奖励的被邀请用户。
+- `source_type`: 奖励来源；当前 `800AI` 实际使用的是 `payment`，表示在线购买积分。
+- `source_id`: 来源标识，在线支付为订单号。
+- `source_credits`: 被邀请用户本次到账积分。
+- `reward_rate`: 奖励比例，默认 `15` 表示 15%。
+- `reward_credits`: 实际发放给邀请人的奖励积分。
+- `reward_index`: 该被邀请用户触发的第几次奖励，最多记录到 3。
 
 ### `user_credits`
 
@@ -448,12 +460,14 @@ CREATE TABLE users (
   `role` VARCHAR(20) DEFAULT 'user',
   status VARCHAR(10) DEFAULT 'active',
   is_whitelisted TINYINT(1) NOT NULL DEFAULT 0,
+  invite_code VARCHAR(16) DEFAULT NULL,
   referrer_id INT DEFAULT NULL,
   used_promo_code_id INT DEFAULT NULL,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY uq_users_business_id (business_id),
+  UNIQUE KEY ux_users_invite_code (invite_code),
   KEY ix_users_referrer_id (referrer_id),
   KEY ix_users_used_promo_code_id (used_promo_code_id),
   CONSTRAINT fk_users_referrer_id FOREIGN KEY (referrer_id) REFERENCES users (id)
@@ -473,6 +487,28 @@ CREATE TABLE user_promo_codes (
   KEY ix_user_promo_codes_code (code),
   KEY ix_user_promo_codes_status (status),
   CONSTRAINT fk_user_promo_codes_user_id FOREIGN KEY (user_id) REFERENCES users (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE referral_reward_grants (
+  id INT NOT NULL AUTO_INCREMENT,
+  referrer_id INT NOT NULL,
+  invitee_id INT NOT NULL,
+  source_type VARCHAR(20) NOT NULL,
+  source_id VARCHAR(64) NOT NULL,
+  source_credits INT NOT NULL DEFAULT 0,
+  reward_rate INT NOT NULL DEFAULT 15,
+  reward_credits INT NOT NULL DEFAULT 0,
+  reward_index INT NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY ix_referral_reward_grants_referrer_id (referrer_id),
+  KEY ix_referral_reward_grants_invitee_id (invitee_id),
+  KEY ix_referral_reward_grants_source_type (source_type),
+  KEY ix_referral_reward_grants_source_id (source_id),
+  UNIQUE KEY ux_referral_reward_source (source_type, source_id, referrer_id),
+  UNIQUE KEY ux_referral_reward_index (referrer_id, invitee_id, reward_index),
+  CONSTRAINT fk_referral_reward_referrer_id FOREIGN KEY (referrer_id) REFERENCES users (id),
+  CONSTRAINT fk_referral_reward_invitee_id FOREIGN KEY (invitee_id) REFERENCES users (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE user_credits (
