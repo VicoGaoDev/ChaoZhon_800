@@ -1719,7 +1719,7 @@ watch(purchaseDialogOpen, (open) => {
               <a-input
                 v-model:value="registerForm.promoCode"
                 size="large"
-                placeholder="填写邀请码或推广码（选填）"
+                placeholder="填写邀请码（选填）"
                 :maxlength="32"
               />
             </a-form-item>
