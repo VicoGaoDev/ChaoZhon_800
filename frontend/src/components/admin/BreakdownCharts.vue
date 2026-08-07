@@ -46,6 +46,7 @@ function modeLabel(value: string) {
   if (value === "image_edit") return "图编辑";
   if (value === "inpaint") return "局部重绘";
   if (value === "promptReverse") return "提示词反推";
+  if (value === "promptOptimize") return "提示词优化";
   return value;
 }
 

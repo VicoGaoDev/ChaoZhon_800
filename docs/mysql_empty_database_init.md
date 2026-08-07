@@ -154,6 +154,32 @@
 - `source_image`: 图编辑场景关联原图。
 - `created_at`: 记录时间。
 
+### `prompt_optimize_styles`
+
+- `name`: 风格名称。
+- `description`: 风格描述。
+- `style_prompt`: 风格系统提示词。
+- `sort_order`: 排序值，越小越靠前。
+- `status`: `enabled` / `disabled`。
+- `is_default`: 是否默认风格。
+- `is_deleted`: 软删除标记。
+- `created_at` / `updated_at`: 创建时间、更新时间。
+
+### `prompt_optimize_tasks`
+
+- `user_id`: 优化任务归属用户。
+- `legacy_prompt_history_id`: 兼容旧 `prompt_history` 回填记录 ID。
+- `style_id`: 选用风格 ID（可为空）。
+- `style_name_snapshot`: 执行时风格名称快照。
+- `source`: 来源，如 `web` / `api`。
+- `original_prompt`: 原始提示词。
+- `optimized_prompt`: 优化后提示词。
+- `reference_images_json`: 参考图 JSON 列表。
+- `source_image`: 首张参考图。
+- `status`: 任务状态。
+- `credit_cost`: 消耗积分。
+- `created_at` / `updated_at`: 创建时间、更新时间。
+
 ### `templates`
 
 - `prompt`: 模板提示词。
@@ -566,6 +592,45 @@ CREATE TABLE prompt_history (
   PRIMARY KEY (id),
   KEY ix_prompt_history_user_id (user_id),
   CONSTRAINT fk_prompt_history_user FOREIGN KEY (user_id) REFERENCES users (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE prompt_optimize_styles (
+  id INT NOT NULL AUTO_INCREMENT,
+  name VARCHAR(100) NOT NULL DEFAULT '',
+  description VARCHAR(255) NOT NULL DEFAULT '',
+  style_prompt TEXT NOT NULL,
+  sort_order INT NOT NULL DEFAULT 100,
+  status VARCHAR(20) NOT NULL DEFAULT 'enabled',
+  is_default TINYINT(1) NOT NULL DEFAULT 0,
+  is_deleted TINYINT(1) NOT NULL DEFAULT 0,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_prompt_optimize_styles_sort (sort_order, id),
+  KEY idx_prompt_optimize_styles_status_default (status, is_default, is_deleted)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE prompt_optimize_tasks (
+  id INT NOT NULL AUTO_INCREMENT,
+  user_id INT NOT NULL,
+  legacy_prompt_history_id INT NULL,
+  style_id INT NULL,
+  style_name_snapshot VARCHAR(100) NOT NULL DEFAULT '',
+  source VARCHAR(20) NOT NULL DEFAULT 'web',
+  original_prompt VARCHAR(5000) NOT NULL DEFAULT '',
+  optimized_prompt VARCHAR(5000) NOT NULL DEFAULT '',
+  reference_images_json TEXT NOT NULL,
+  source_image VARCHAR(500) NOT NULL DEFAULT '',
+  status VARCHAR(20) NOT NULL DEFAULT 'success',
+  credit_cost INT NOT NULL DEFAULT 0,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_prompt_optimize_tasks_legacy_history (legacy_prompt_history_id),
+  KEY idx_prompt_optimize_tasks_user_created (user_id, created_at),
+  KEY idx_prompt_optimize_tasks_source_status_created (source, status, created_at),
+  KEY idx_prompt_optimize_tasks_style_id (style_id),
+  CONSTRAINT fk_prompt_optimize_tasks_user FOREIGN KEY (user_id) REFERENCES users (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE tasks (

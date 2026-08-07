@@ -212,6 +212,7 @@ function sceneTypeLabel(sceneType: ExternalApiSceneBinding["scene_type"]) {
   if (sceneType === "image_edit") return "图编辑";
   if (sceneType === "inpaint") return "局部重绘";
   if (sceneType === "prompt_reverse") return "提示词反推";
+  if (sceneType === "prompt_optimize") return "提示词优化";
   return sceneType;
 }
 
@@ -1215,6 +1216,7 @@ function copySecret(value: string, label: string) {
               <a-select-option value="generate" label="文生图">文生图</a-select-option>
               <a-select-option value="image_edit" label="图编辑">图编辑</a-select-option>
               <a-select-option value="prompt_reverse" label="提示词反推">提示词反推</a-select-option>
+              <a-select-option value="prompt_optimize" label="提示词优化">提示词优化</a-select-option>
               <a-select-option value="inpaint" label="局部重绘">局部重绘</a-select-option>
             </a-select>
             <a-button type="primary" class="api-primary-btn" :icon="h(PlusOutlined)" @click="openCreateScene">
@@ -1468,6 +1470,18 @@ function copySecret(value: string, label: string) {
               <div>用于反推接口：</div>
               <pre v-pre>{{ image_data_url }}</pre>
               <pre v-pre>{{ prompt_reverse_text }}</pre>
+            </div>
+          </a-collapse-panel>
+          <a-collapse-panel key="optimize" header="提示词优化相关">
+            <div class="doc-block">
+              <div>用于提示词优化接口：</div>
+              <pre v-pre>{{ prompt }}</pre>
+              <pre v-pre>{{ prompt_optimize_text }}</pre>
+              <pre v-pre>{{ prompt_optimize_style_prompt }}</pre>
+              <pre v-pre>{{ reference_images }}</pre>
+              <pre v-pre>{{ reference_image_1_url }}</pre>
+              <pre v-pre>{{ reference_image_1_data_url }}</pre>
+              <pre v-pre>{{ reference_image_1_base64 }}</pre>
             </div>
           </a-collapse-panel>
         </a-collapse>

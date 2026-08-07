@@ -1,6 +1,11 @@
+export interface PromptInterceptionTipSection {
+  title: string;
+  items: string[];
+}
+
 export const PROMPT_INTERCEPTION_TIP_TITLE = "拦截内容提示";
 
-export const PROMPT_INTERCEPTION_TIP_SECTIONS = [
+export const PROMPT_INTERCEPTION_TIP_SECTIONS: PromptInterceptionTipSection[] = [
   {
     title: "易被拦截的提示词内容",
     items: [

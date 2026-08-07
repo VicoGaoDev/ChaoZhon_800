@@ -84,6 +84,10 @@ export function deletePromptHistory(id: number): Promise<void> {
   return client.delete(`/auth/prompt-history/${id}`);
 }
 
+export function deletePromptOptimizeTask(id: number): Promise<void> {
+  return client.delete(`/auth/prompt-optimize-tasks/${id}`);
+}
+
 export function getCreditLogs(params: {
   page?: number;
   page_size?: number;
@@ -91,7 +95,7 @@ export function getCreditLogs(params: {
   start_date?: string;
   end_date?: string;
   direction?: "increase" | "decrease";
-  mode?: "text_generate" | "image_edit" | "inpaint" | "promptReverse" | "manual" | "redeem" | "purchase";
+  mode?: "text_generate" | "image_edit" | "inpaint" | "promptReverse" | "promptOptimize" | "manual" | "redeem" | "purchase";
 }): Promise<{ total: number; items: CreditLog[] }> {
   return client.get("/auth/credit-logs", { params });
 }

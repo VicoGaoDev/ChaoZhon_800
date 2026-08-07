@@ -30,6 +30,11 @@ def _is_credit_exempt_user(user: User | None) -> bool:
     return bool(user and user.role == "superadmin")
 def _extract_prompt_text(payload: dict) -> str:
     candidate_paths = [
+        payload.get("text"),
+        payload.get("choices", [{}])[0].get("message", {}).get("content"),
+        payload.get("choices", [{}])[0].get("message", {}).get("content", [{}]),
+        payload.get("choices", [{}])[0].get("message", {}).get("text"),
+        payload.get("choices", [{}])[0].get("text"),
         payload.get("output", {}).get("text"),
         payload.get("output", {}).get("choices", [{}])[0].get("message", {}).get("content"),
         payload.get("output", {}).get("choices", [{}])[0].get("message", {}).get("content", [{}]),

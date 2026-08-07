@@ -88,6 +88,7 @@ const routeOrder = new Map<string, number>([
   ["/feedbacks", 12],
   ["/feedbacks/:feedbackId", 13],
   ["/admin/templates", 14],
+  ["/admin/prompt-optimize", 14.5],
   ["/admin/users", 15],
   ["/admin/user-tasks", 16],
   ["/admin/dashboard", 17],
@@ -136,6 +137,7 @@ function getPrimaryMenuIconSrc(item: (typeof primaryMenuItems)[number]) {
 const adminMenuItems = computed(() =>
   [
     { key: "/admin/templates", label: "模版管理", icon: PictureOutlined, superAdminOnly: false },
+    { key: "/admin/prompt-optimize", label: "提示词优化", icon: ThunderboltOutlined, superAdminOnly: false },
     { key: "/admin/users", label: "用户管理", icon: TeamOutlined, superAdminOnly: false },
     { key: "/admin/user-tasks", label: "用户任务", icon: PictureOutlined, superAdminOnly: false },
     { key: "/admin/dashboard", label: "数据统计", icon: BarChartOutlined, superAdminOnly: false },
@@ -153,6 +155,7 @@ const adminMenuItems = computed(() =>
 const adminMenuBaseItems = computed(() =>
   adminMenuItems.value.filter((item) => [
     "/admin/templates",
+    "/admin/prompt-optimize",
     "/admin/users",
     "/admin/user-tasks",
     "/admin/dashboard",

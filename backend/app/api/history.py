@@ -17,7 +17,7 @@ def list_history(
     page_size: int = Query(20, ge=1, le=100),
     respect_pins: bool = Query(True),
     include_prompt_reverse: bool = Query(True),
-    mode: str | None = Query(None, pattern="^(text_generate|image_edit|inpaint|promptReverse)$"),
+    mode: str | None = Query(None, pattern="^(text_generate|image_edit|inpaint|promptReverse|promptOptimize)$"),
     source: str | None = Query(None, pattern="^(web|app|api)$"),
     model: str | None = Query(None),
     prompt: str | None = Query(None),

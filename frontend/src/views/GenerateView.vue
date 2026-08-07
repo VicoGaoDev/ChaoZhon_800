@@ -41,6 +41,7 @@ import {
   resolvePreviewImageUrl,
 } from "@/api/images";
 import { reversePrompt } from "@/api/promptReverse";
+import { optimizePrompt } from "@/api/promptOptimize";
 import { getUserAssetStats, uploadUserAssetFile } from "@/api/userAssets";
 import { uploadReferenceImage } from "@/api/upload";
 import { getMe } from "@/api/auth";
@@ -50,6 +51,7 @@ import RepaintCanvas from "@/components/generate/RepaintCanvas.vue";
 import AspectRatioPicker from "@/components/generate/AspectRatioPicker.vue";
 import OptionGridPicker from "@/components/generate/OptionGridPicker.vue";
 import PromptInterceptionTip from "@/components/generate/PromptInterceptionTip.vue";
+import PromptOptimizeStyleDialog from "@/components/generate/PromptOptimizeStyleDialog.vue";
 import UserAssetPicker from "@/components/assets/UserAssetPicker.vue";
 import UserPromptLibraryModal from "@/components/prompts/UserPromptLibraryModal.vue";
 import FeedbackDialog from "@/components/feedback/FeedbackDialog.vue";
@@ -71,7 +73,7 @@ import {
   readStoredGridColumnCount,
   writeStoredGridColumnCount,
 } from "@/lib/gridColumnPreference";
-import type { GenerationModelOption, ImageResult, SceneOptionItem, TaskResult, TaskSceneConfig, UserAsset, UserHistoryCard, UserPrompt } from "@/types";
+import type { GenerationModelOption, ImageResult, PublicPromptOptimizeStyle, SceneOptionItem, TaskResult, TaskSceneConfig, UserAsset, UserHistoryCard, UserPrompt } from "@/types";
 
 const auth = useAuthStore();
 const router = useRouter();
@@ -104,6 +106,7 @@ const DEFAULT_SCENE_COSTS: Record<string, number> = {
   banana_pro_edit: 4,
   banana_pro_plus_edit: 4,
   prompt_reverse: 1,
+  prompt_optimize: 1,
   inpaint: 4,
 };
 
@@ -198,6 +201,23 @@ const reverseUploading = ref(false);
 const reverseInput = ref<HTMLInputElement | null>(null);
 const reverseLoading = ref(false);
 const reversePromptResult = ref("");
+const promptOptimizeLoading = ref(false);
+type PromptOptimizeTarget = "prompt" | "repaintPrompt";
+type PromptOptimizePayload = {
+  prompt: string;
+  reference_images?: string[];
+  style_name: string;
+  style_prompt: string;
+};
+const promptOptimizeTarget = ref<PromptOptimizeTarget | null>(null);
+const activePromptOptimizeRequestId = ref<number | null>(null);
+const promptOptimizeStyleDialogOpen = ref(false);
+const pendingPromptOptimizePayload = ref<Omit<PromptOptimizePayload, "style_name" | "style_prompt"> | null>(null);
+const pendingPromptOptimizeTarget = ref<PromptOptimizeTarget | null>(null);
+const PROMPT_OPTIMIZE_TOOLTIP = "在保留原意的前提下，自动补全构图、光线、画风和细节，让提示词更适合出图";
+let promptOptimizeRequestSeq = 0;
+let promptOptimizeAbortController: AbortController | null = null;
+const cancelledPromptOptimizeRequestIds = new Set<number>();
 const brushSize = ref(28);
 const repaintTool = ref<"paint" | "erase" | "rect" | "circle" | "text">("paint");
 const repaintLineColor = ref<string>("#c38d36");
@@ -393,6 +413,7 @@ function resolveSceneCreditCost(sceneKey: string, targetResolution = resolution.
 }
 const selectedModelCreditCost = computed(() => resolveSceneCreditCost(selectedModel.value, resolution.value));
 const promptReverseCreditCost = computed(() => sceneCostMap.value.prompt_reverse ?? DEFAULT_SCENE_COSTS.prompt_reverse);
+const promptOptimizeCreditCost = computed(() => sceneCostMap.value.prompt_optimize ?? DEFAULT_SCENE_COSTS.prompt_optimize);
 const inpaintCreditCost = computed(() => sceneCostMap.value.inpaint ?? DEFAULT_SCENE_COSTS.inpaint);
 const isExtendedToolMode = computed(() => generateMode.value === "promptReverse" || generateMode.value === "inpaint");
 const activeExtendedToolLabel = computed(() => (
@@ -1391,6 +1412,173 @@ const activePrompt = computed(() => (
   generateMode.value === "inpaint" ? repaintPrompt.value : prompt.value
 ));
 
+function getPromptOptimizeReferenceImages() {
+  if (generateMode.value === "imageEdit") {
+    return [...referenceUrls.value];
+  }
+  if (generateMode.value === "inpaint") {
+    return sourceImageUrl.value.trim() ? [sourceImageUrl.value.trim()] : [];
+  }
+  return [];
+}
+
+function applyOptimizedPrompt(nextPrompt: string, target: PromptOptimizeTarget) {
+  if (target === "repaintPrompt") {
+    repaintPrompt.value = nextPrompt;
+    return;
+  }
+  prompt.value = nextPrompt;
+}
+
+const isPromptOptimizeOnMainPrompt = computed(() => (
+  promptOptimizeLoading.value && promptOptimizeTarget.value === "prompt"
+));
+const isPromptOptimizeOnRepaintPrompt = computed(() => (
+  promptOptimizeLoading.value && promptOptimizeTarget.value === "repaintPrompt"
+));
+
+function getPromptOptimizeTarget(): PromptOptimizeTarget {
+  return generateMode.value === "inpaint" ? "repaintPrompt" : "prompt";
+}
+
+async function runPromptOptimize(
+  payload: PromptOptimizePayload,
+  target: PromptOptimizeTarget,
+) {
+  const requestId = ++promptOptimizeRequestSeq;
+  const controller = new AbortController();
+  activePromptOptimizeRequestId.value = requestId;
+  promptOptimizeTarget.value = target;
+  promptOptimizeAbortController = controller;
+  promptOptimizeLoading.value = true;
+  try {
+    const res = await optimizePrompt(payload, controller.signal);
+    if (cancelledPromptOptimizeRequestIds.has(requestId) || activePromptOptimizeRequestId.value !== requestId) {
+      return;
+    }
+    const optimizedPrompt = (res.prompt || "").trim();
+    if (!optimizedPrompt) {
+      message.error("提示词优化返回内容为空");
+      return;
+    }
+    applyOptimizedPrompt(optimizedPrompt, target);
+    message.success("提示词已优化并回填");
+    getMe().then((u) => auth.updateUser(u)).catch(() => {});
+  } catch (err: any) {
+    if (cancelledPromptOptimizeRequestIds.has(requestId) || err?.code === "ERR_CANCELED" || err?.name === "CanceledError") {
+      return;
+    }
+    const detail = err?.response?.data?.detail || "";
+    if (isInsufficientCreditsError(err)) {
+      showInsufficientCreditsPurchase(detail);
+      return;
+    }
+    message.error(detail || "提示词优化失败");
+  } finally {
+    cancelledPromptOptimizeRequestIds.delete(requestId);
+    if (activePromptOptimizeRequestId.value === requestId) {
+      activePromptOptimizeRequestId.value = null;
+      promptOptimizeTarget.value = null;
+      promptOptimizeLoading.value = false;
+    }
+    if (promptOptimizeAbortController === controller) {
+      promptOptimizeAbortController = null;
+    }
+  }
+}
+
+function cancelPromptOptimize() {
+  const requestId = activePromptOptimizeRequestId.value;
+  if (requestId == null) return;
+  cancelledPromptOptimizeRequestIds.add(requestId);
+  activePromptOptimizeRequestId.value = null;
+  promptOptimizeTarget.value = null;
+  promptOptimizeLoading.value = false;
+  promptOptimizeAbortController?.abort();
+  promptOptimizeAbortController = null;
+}
+
+function confirmCancelPromptOptimize() {
+  if (!promptOptimizeLoading.value || activePromptOptimizeRequestId.value == null) return;
+  Modal.confirm({
+    title: "确认取消提示词优化？",
+    content: "取消后，即使本次优化结果稍后返回，也不会回填到输入框。",
+    centered: true,
+    okText: "确认取消",
+    cancelText: "继续等待",
+    okButtonProps: { danger: true },
+    onOk: () => {
+      cancelPromptOptimize();
+      message.info("已取消提示词优化");
+    },
+  });
+}
+
+function openPromptOptimizeStyleDialog(
+  payload: Omit<PromptOptimizePayload, "style_name" | "style_prompt">,
+  target: PromptOptimizeTarget,
+) {
+  pendingPromptOptimizePayload.value = payload;
+  pendingPromptOptimizeTarget.value = target;
+  promptOptimizeStyleDialogOpen.value = true;
+}
+
+function closePromptOptimizeStyleDialog() {
+  promptOptimizeStyleDialogOpen.value = false;
+  pendingPromptOptimizePayload.value = null;
+  pendingPromptOptimizeTarget.value = null;
+}
+
+function handlePromptOptimizeStyleConfirm(style: PublicPromptOptimizeStyle) {
+  if (!pendingPromptOptimizePayload.value || !pendingPromptOptimizeTarget.value) {
+    message.warning("提示词优化请求已失效，请重新发起");
+    closePromptOptimizeStyleDialog();
+    return;
+  }
+  const payload: PromptOptimizePayload = {
+    ...pendingPromptOptimizePayload.value,
+    style_name: style.name,
+    style_prompt: style.style_prompt,
+  };
+  const target = pendingPromptOptimizeTarget.value;
+  closePromptOptimizeStyleDialog();
+  void runPromptOptimize(payload, target);
+}
+
+async function handlePromptOptimize() {
+  if (promptOptimizeLoading.value) return;
+  if (!(await ensureAuthenticated())) return;
+  const normalizedPrompt = activePrompt.value.trim();
+  if (!normalizedPrompt) {
+    message.warning("请先输入需要优化的提示词");
+    return;
+  }
+  if (generateMode.value === "imageEdit" && hasPendingReferenceUploads.value) {
+    message.warning("参考图仍在上传中，请稍候再优化");
+    return;
+  }
+  if (generateMode.value === "inpaint" && sourceUploading.value) {
+    message.warning("原图仍在上传中，请稍候再优化");
+    return;
+  }
+  if (generateMode.value === "inpaint" && sourcePreviewUrl.value && !sourceImageUrl.value) {
+    message.warning("原图未上传完成，请稍候再优化");
+    return;
+  }
+  if (!isSuperAdmin.value && userCredits.value < promptOptimizeCreditCost.value) {
+    showInsufficientCreditsPurchase(`积分不足，需要 ${promptOptimizeCreditCost.value} 积分，当前余额 ${userCredits.value}`);
+    return;
+  }
+
+  const payload = {
+    prompt: normalizedPrompt,
+    reference_images: getPromptOptimizeReferenceImages(),
+  };
+  const target = getPromptOptimizeTarget();
+  openPromptOptimizeStyleDialog(payload, target);
+}
+
+
 async function handlePromptReverse() {
   if (!(await ensureAuthenticated())) return;
   if (!reverseImageUrl.value.trim()) {
@@ -2237,17 +2425,36 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
                   <label>提示词</label>
                   <div class="prompt-label-actions">
                     <PromptInterceptionTip />
+                    <a-tooltip :title="PROMPT_OPTIMIZE_TOOLTIP">
+                      <span>
+                        <a-button type="text" class="prompt-library-btn" :loading="promptOptimizeLoading" @click="handlePromptOptimize">
+                          <template #icon><ThunderboltOutlined /></template>
+                          提示词优化
+                        </a-button>
+                      </span>
+                    </a-tooltip>
                     <a-button type="text" class="prompt-library-btn" @click="openPromptLibrary">提示词库</a-button>
                   </div>
                 </div>
-                <a-textarea
-                  v-model:value="prompt"
-                  :rows="5"
-                  placeholder="描述您想要生成的图片..."
-                  class="prompt-input"
-                  :maxlength="TASK_PROMPT_MAX_LENGTH"
-                  show-count
-                />
+                <div class="prompt-input-wrap">
+                  <a-textarea
+                    v-model:value="prompt"
+                    :rows="5"
+                    placeholder="描述您想要生成的图片..."
+                    class="prompt-input"
+                    :maxlength="TASK_PROMPT_MAX_LENGTH"
+                    :allow-clear="!isPromptOptimizeOnMainPrompt"
+                    :readonly="isPromptOptimizeOnMainPrompt"
+                    show-count
+                  />
+                  <div v-if="isPromptOptimizeOnMainPrompt" class="prompt-optimize-status">
+                    <div class="prompt-optimize-status-text">
+                      <LoadingOutlined spin />
+                      <span>优化中，约 10 秒左右</span>
+                    </div>
+                    <button type="button" class="prompt-optimize-cancel-btn" @click="confirmCancelPromptOptimize">取消</button>
+                  </div>
+                </div>
               </div>
 
               <div class="settings-row settings-row-inline config-section compact-config-section">
@@ -2525,17 +2732,36 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
                   <label>提示词</label>
                   <div class="prompt-label-actions">
                     <PromptInterceptionTip />
+                    <a-tooltip :title="PROMPT_OPTIMIZE_TOOLTIP">
+                      <span>
+                        <a-button type="text" class="prompt-library-btn" :loading="promptOptimizeLoading" @click="handlePromptOptimize">
+                          <template #icon><ThunderboltOutlined /></template>
+                          提示词优化
+                        </a-button>
+                      </span>
+                    </a-tooltip>
                     <a-button type="text" class="prompt-library-btn" @click="openPromptLibrary">提示词库</a-button>
                   </div>
                 </div>
-                <a-textarea
-                  v-model:value="prompt"
-                  :rows="5"
-                  placeholder="描述您想要生成的图片..."
-                  class="prompt-input"
-                  :maxlength="TASK_PROMPT_MAX_LENGTH"
-                  show-count
-                />
+                <div class="prompt-input-wrap">
+                  <a-textarea
+                    v-model:value="prompt"
+                    :rows="5"
+                    placeholder="描述您想要生成的图片..."
+                    class="prompt-input"
+                    :maxlength="TASK_PROMPT_MAX_LENGTH"
+                    :allow-clear="!isPromptOptimizeOnMainPrompt"
+                    :readonly="isPromptOptimizeOnMainPrompt"
+                    show-count
+                  />
+                  <div v-if="isPromptOptimizeOnMainPrompt" class="prompt-optimize-status">
+                    <div class="prompt-optimize-status-text">
+                      <LoadingOutlined spin />
+                      <span>优化中，约 10 秒左右</span>
+                    </div>
+                    <button type="button" class="prompt-optimize-cancel-btn" @click="confirmCancelPromptOptimize">取消</button>
+                  </div>
+                </div>
               </div>
 
               <div class="settings-row settings-row-inline config-section compact-config-section">
@@ -2883,17 +3109,36 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
                 <div class="prompt-label-row">
                   <label>提示词</label>
                   <div class="prompt-label-actions">
+                    <a-tooltip :title="PROMPT_OPTIMIZE_TOOLTIP">
+                      <span>
+                        <a-button type="text" class="prompt-library-btn" :loading="promptOptimizeLoading" @click="handlePromptOptimize">
+                          <template #icon><ThunderboltOutlined /></template>
+                          提示词优化
+                        </a-button>
+                      </span>
+                    </a-tooltip>
                     <a-button type="text" class="prompt-library-btn" @click="openPromptLibrary">提示词库</a-button>
                   </div>
                 </div>
-                <a-textarea
-                  v-model:value="repaintPrompt"
-                  :rows="5"
-                  placeholder="描述需要局部重绘后的效果..."
-                  class="prompt-input"
-                  :maxlength="TASK_PROMPT_MAX_LENGTH"
-                  show-count
-                />
+                <div class="prompt-input-wrap">
+                  <a-textarea
+                    v-model:value="repaintPrompt"
+                    :rows="5"
+                    placeholder="描述需要局部重绘后的效果..."
+                    class="prompt-input"
+                    :maxlength="TASK_PROMPT_MAX_LENGTH"
+                    :allow-clear="!isPromptOptimizeOnRepaintPrompt"
+                    :readonly="isPromptOptimizeOnRepaintPrompt"
+                    show-count
+                  />
+                  <div v-if="isPromptOptimizeOnRepaintPrompt" class="prompt-optimize-status">
+                    <div class="prompt-optimize-status-text">
+                      <LoadingOutlined spin />
+                      <span>优化中，约 10 秒左右</span>
+                    </div>
+                    <button type="button" class="prompt-optimize-cancel-btn" @click="confirmCancelPromptOptimize">取消</button>
+                  </div>
+                </div>
               </div>
               </div>
 
@@ -3168,6 +3413,11 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
       @select-asset="handlePickUserAsset"
     />
     <TemplateEditorDialog ref="templateDialogRef" />
+    <PromptOptimizeStyleDialog
+      v-model:open="promptOptimizeStyleDialogOpen"
+      @confirm="handlePromptOptimizeStyleConfirm"
+      @update:open="(value) => { if (!value) closePromptOptimizeStyleDialog(); }"
+    />
   </div>
 </template>
 
@@ -3550,6 +3800,54 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+}
+
+.prompt-input-wrap {
+  position: relative;
+}
+
+.prompt-optimize-status {
+  position: absolute;
+  right: 12px;
+  bottom: 34px;
+  left: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  pointer-events: none;
+}
+
+.prompt-optimize-status-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: #a88962;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.prompt-optimize-cancel-btn {
+  flex-shrink: 0;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid rgba(241, 221, 183, 0.95);
+  border-radius: 999px;
+  background: rgba(255, 250, 242, 0.96);
+  color: #a88962;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.prompt-optimize-cancel-btn:hover {
+  color: #d38a12;
+  background: rgba(255, 238, 205, 0.94);
+  border-color: #efc784;
 }
 
 .prompt-library-btn,

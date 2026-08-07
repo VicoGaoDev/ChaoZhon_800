@@ -56,7 +56,9 @@ from app.services.referral_reward_service import (
 )
 from app.services.credit_redeem_service import redeem_credit_key
 from app.models.prompt_history import PromptHistory
+from app.models.prompt_optimize_task import PromptOptimizeTask
 from app.services.admin_service import get_credit_logs
+from app.services.prompt_optimize_service import PROMPT_OPTIMIZE_MODE
 from app.services.user_credit_service import get_user_credit_balance
 from app.services.cos_service import normalize_upload_content_type
 
@@ -332,7 +334,7 @@ def my_credit_logs(
     start_date: Optional[datetime] = Query(None),
     end_date: Optional[datetime] = Query(None),
     direction: Optional[str] = Query(None, pattern="^(increase|decrease)$"),
-    mode: Optional[str] = Query(None, pattern="^(text_generate|image_edit|inpaint|promptReverse|manual|redeem|purchase)$"),
+    mode: Optional[str] = Query(None, pattern="^(text_generate|image_edit|inpaint|promptReverse|promptOptimize|manual|redeem|purchase)$"),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -352,14 +354,24 @@ def list_prompt_history(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    rows = (
+    prompt_history_rows = (
         db.query(PromptHistory)
-        .filter(PromptHistory.user_id == user.id)
+        .filter(
+            PromptHistory.user_id == user.id,
+            PromptHistory.mode != PROMPT_OPTIMIZE_MODE,
+        )
         .order_by(PromptHistory.created_at.desc())
         .limit(10)
         .all()
     )
-    return [
+    prompt_optimize_rows = (
+        db.query(PromptOptimizeTask)
+        .filter(PromptOptimizeTask.user_id == user.id)
+        .order_by(PromptOptimizeTask.created_at.desc(), PromptOptimizeTask.id.desc())
+        .limit(10)
+        .all()
+    )
+    items = [
         {
             "id": r.id,
             "prompt": r.prompt,
@@ -367,8 +379,19 @@ def list_prompt_history(
             "source_image": r.source_image or "",
             "created_at": r.created_at,
         }
-        for r in rows
+        for r in prompt_history_rows
+    ] + [
+        {
+            "id": row.id,
+            "prompt": (row.optimized_prompt or row.original_prompt or "").strip(),
+            "mode": PROMPT_OPTIMIZE_MODE,
+            "source_image": row.source_image or "",
+            "created_at": row.created_at,
+        }
+        for row in prompt_optimize_rows
     ]
+    items.sort(key=lambda item: item["created_at"], reverse=True)
+    return items[:10]
 
 
 @router.delete("/prompt-history/{item_id}")
@@ -378,7 +401,26 @@ def delete_prompt_history(
     db: Session = Depends(get_db),
 ):
     row = db.query(PromptHistory).filter(
-        PromptHistory.id == item_id, PromptHistory.user_id == user.id
+        PromptHistory.id == item_id,
+        PromptHistory.user_id == user.id,
+        PromptHistory.mode != PROMPT_OPTIMIZE_MODE,
+    ).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    db.delete(row)
+    db.commit()
+    return {"message": "已删除"}
+
+
+@router.delete("/prompt-optimize-tasks/{item_id}")
+def delete_prompt_optimize_task(
+    item_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    row = db.query(PromptOptimizeTask).filter(
+        PromptOptimizeTask.id == item_id,
+        PromptOptimizeTask.user_id == user.id,
     ).first()
     if not row:
         raise HTTPException(status_code=404, detail="记录不存在")

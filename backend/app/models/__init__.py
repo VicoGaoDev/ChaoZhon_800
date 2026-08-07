@@ -18,6 +18,8 @@ from app.models.user_credit import UserCredit
 from app.models.user_api_key import UserApiKey
 from app.models.user_promo_code import UserPromoCode
 from app.models.prompt_history import PromptHistory
+from app.models.prompt_optimize_style import PromptOptimizeStyle
+from app.models.prompt_optimize_task import PromptOptimizeTask
 from app.models.history_pin import HistoryPin
 from app.models.feedback import Feedback
 from app.models.system_message import SystemMessage, SystemMessageRecipient
@@ -46,6 +48,8 @@ __all__ = [
     "UserApiKey",
     "UserPromoCode",
     "PromptHistory",
+    "PromptOptimizeStyle",
+    "PromptOptimizeTask",
     "HistoryPin",
     "Feedback",
     "SystemMessage",

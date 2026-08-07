@@ -39,6 +39,9 @@ import type {
   AdminInviteRewardDashboard,
   AdminInviteRewardUserDetail,
   AdminPromoStatsDashboard,
+  PromptOptimizeStyle,
+  PromptOptimizeStylePayload,
+  PromptOptimizeStyleStatus,
 } from "@/types";
 
 function buildAnalyticsParams(query: AdminAnalyticsQuery): Record<string, unknown> {
@@ -102,7 +105,7 @@ export function getCreditLogs(
   startDate?: string,
   endDate?: string,
   direction?: "increase" | "decrease",
-  mode?: "text_generate" | "image_edit" | "inpaint" | "promptReverse" | "manual" | "redeem" | "purchase",
+  mode?: "text_generate" | "image_edit" | "inpaint" | "promptReverse" | "promptOptimize" | "manual" | "redeem" | "purchase",
 ): Promise<{ total: number; items: CreditLog[] }> {
   const params: Record<string, unknown> = { page, page_size: pageSize };
   if (userId) params.user_id = userId;
@@ -187,7 +190,7 @@ export function getAdminHistory(
 }
 
 export function getAdminHistoryDetail(payload: {
-  item_type: "task" | "prompt_history";
+  item_type: "task" | "prompt_history" | "prompt_optimize_task";
   task_id?: string | null;
   history_id?: number | null;
 }): Promise<UserHistoryCard> {
@@ -410,6 +413,30 @@ export function deleteExternalApiSceneBinding(
   sceneKey: ExternalApiSceneBinding["scene_key"],
 ): Promise<void> {
   return client.delete(`/admin/external-api-scene-bindings/${sceneKey}`);
+}
+
+export function listPromptOptimizeStyles(): Promise<PromptOptimizeStyle[]> {
+  return client.get("/admin/prompt-optimize-styles");
+}
+
+export function createPromptOptimizeStyle(payload: PromptOptimizeStylePayload): Promise<PromptOptimizeStyle> {
+  return client.post("/admin/prompt-optimize-styles", payload);
+}
+
+export function updatePromptOptimizeStyle(styleId: number, payload: PromptOptimizeStylePayload): Promise<PromptOptimizeStyle> {
+  return client.put(`/admin/prompt-optimize-styles/${styleId}`, payload);
+}
+
+export function updatePromptOptimizeStyleStatus(styleId: number, status: PromptOptimizeStyleStatus): Promise<PromptOptimizeStyle> {
+  return client.patch(`/admin/prompt-optimize-styles/${styleId}/status`, { status });
+}
+
+export function setPromptOptimizeStyleDefault(styleId: number): Promise<PromptOptimizeStyle> {
+  return client.post(`/admin/prompt-optimize-styles/${styleId}/set-default`);
+}
+
+export function deletePromptOptimizeStyle(styleId: number): Promise<void> {
+  return client.delete(`/admin/prompt-optimize-styles/${styleId}`);
 }
 
 export function updateExternalApiSceneBinding(

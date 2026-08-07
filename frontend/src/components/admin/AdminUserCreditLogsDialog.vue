@@ -43,6 +43,7 @@ function modeLabel(mode: CreditLog["mode"]) {
   if (mode === "image_edit") return "图编辑";
   if (mode === "inpaint") return "局部重绘";
   if (mode === "promptReverse") return "提示词反推";
+  if (mode === "promptOptimize") return "提示词优化";
   if (mode === "redeem") return "兑换积分";
   if (mode === "purchase") return "在线购买";
   return "手动调整";

@@ -99,6 +99,7 @@ function modeLabel(taskType: UserHistoryCard["task_type"]) {
   if (taskType === "image_edit") return "图编辑";
   if (taskType === "inpaint") return "局部重绘";
   if (taskType === "promptReverse") return "提示词反推";
+  if (taskType === "promptOptimize") return "提示词优化";
   return taskType;
 }
 
@@ -122,6 +123,7 @@ function detailMetaList(item: UserHistoryCard) {
     `来源：${sourceLabel(item.source)}`,
     `类型：${modeLabel(item.task_type)}`,
     `模型：${getModelLabel(item.model)}`,
+    item.style_name ? `风格：${item.style_name}` : "",
     `比例：${item.size || "-"}`,
     item.resolution ? `分辨率：${item.resolution}` : "",
     item.custom_size ? `自定义分辨率：${item.custom_size}` : "",

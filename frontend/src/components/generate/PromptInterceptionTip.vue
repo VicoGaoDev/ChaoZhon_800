@@ -4,56 +4,74 @@ import {
   PROMPT_INTERCEPTION_TIP_FOOTNOTE,
   PROMPT_INTERCEPTION_TIP_SECTIONS,
   PROMPT_INTERCEPTION_TIP_TITLE,
+  type PromptInterceptionTipSection,
 } from "@/lib/promptInterceptionTip";
+
+withDefaults(defineProps<{
+  title?: string;
+  sections?: PromptInterceptionTipSection[];
+  footnote?: string;
+}>(), {
+  title: PROMPT_INTERCEPTION_TIP_TITLE,
+  sections: () => PROMPT_INTERCEPTION_TIP_SECTIONS,
+  footnote: PROMPT_INTERCEPTION_TIP_FOOTNOTE,
+});
+
+function getBodyPopupContainer() {
+  return document.body;
+}
 </script>
 
 <template>
-  <a-popover
-    trigger="click"
-    placement="bottomRight"
-    overlay-class-name="prompt-interception-popover"
-    class="prompt-interception-popover-trigger"
-  >
-    <template #content>
-      <div class="prompt-interception-tip-panel">
-        <div class="prompt-interception-tip-panel-title">{{ PROMPT_INTERCEPTION_TIP_TITLE }}</div>
-        <div
-          v-for="section in PROMPT_INTERCEPTION_TIP_SECTIONS"
-          :key="section.title"
-          class="prompt-interception-tip-section"
-        >
-          <div class="prompt-interception-tip-section-title">{{ section.title }}</div>
-          <ul class="prompt-interception-tip-list">
-            <li v-for="item in section.items" :key="item">{{ item }}</li>
-          </ul>
+  <a-tooltip :title="title" :get-popup-container="getBodyPopupContainer">
+    <a-popover
+      trigger="click"
+      placement="bottomLeft"
+      overlay-class-name="prompt-interception-popover"
+      class="prompt-interception-popover-trigger"
+      :get-popup-container="getBodyPopupContainer"
+    >
+      <template #content>
+        <div class="prompt-interception-tip-panel">
+          <div class="prompt-interception-tip-panel-title">{{ title }}</div>
+          <div
+            v-for="section in sections"
+            :key="section.title"
+            class="prompt-interception-tip-section"
+          >
+            <div class="prompt-interception-tip-section-title">{{ section.title }}</div>
+            <ul class="prompt-interception-tip-list">
+              <li v-for="item in section.items" :key="item">{{ item }}</li>
+            </ul>
+          </div>
+          <div class="prompt-interception-tip-footnote">{{ footnote }}</div>
         </div>
-        <div class="prompt-interception-tip-footnote">{{ PROMPT_INTERCEPTION_TIP_FOOTNOTE }}</div>
-      </div>
-    </template>
-    <button type="button" class="prompt-interception-trigger" aria-label="拦截内容提示">
-      <WarningFilled class="prompt-interception-trigger-icon" />
-      <span>{{ PROMPT_INTERCEPTION_TIP_TITLE }}</span>
-    </button>
-  </a-popover>
+      </template>
+      <button type="button" class="prompt-interception-trigger" :aria-label="title">
+        <WarningFilled class="prompt-interception-trigger-icon" />
+      </button>
+    </a-popover>
+  </a-tooltip>
 </template>
 
 <style scoped lang="scss">
 .prompt-interception-popover-trigger {
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
 }
 
 .prompt-interception-trigger {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
+  width: 32px;
   height: 32px;
-  padding: 0 10px;
+  padding: 0;
   border: 1px solid rgba(255, 180, 180, 0.85);
   border-radius: 12px;
   background: rgba(255, 242, 242, 0.96);
   color: #c0392b;
-  font-size: 12px;
-  font-weight: 600;
   line-height: 1;
   cursor: pointer;
   transition:
@@ -82,6 +100,7 @@ import {
 
 <style lang="scss">
 .prompt-interception-popover {
+  z-index: 1300;
   max-width: calc(100vw - 40px);
 
   .ant-popover-inner {

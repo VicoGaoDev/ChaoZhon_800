@@ -118,6 +118,12 @@ const router = createRouter({
           component: () => import("@/views/admin/TemplateManageView.vue"),
         },
         {
+          path: "admin/prompt-optimize",
+          name: "AdminPromptOptimizeManage",
+          meta: { requiresAdmin: true },
+          component: () => import("@/views/admin/PromptOptimizeManageView.vue"),
+        },
+        {
           path: "admin/users",
           name: "UserManage",
           meta: { requiresAdmin: true },

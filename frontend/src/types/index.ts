@@ -32,7 +32,7 @@ export interface UserApiKey {
 export interface PromptHistoryItem {
   id: number;
   prompt: string;
-  mode: "generate" | "inpaint" | "promptReverse";
+  mode: "generate" | "inpaint" | "promptReverse" | "promptOptimize";
   source_image: string;
   created_at: string;
 }
@@ -49,9 +49,10 @@ export interface ImageResult {
   is_deleted?: boolean;
 }
 
-export type TaskMode = "generate" | "inpaint" | "promptReverse";
-export type TaskType = "text_generate" | "image_edit" | "inpaint" | "promptReverse";
+export type TaskMode = "generate" | "inpaint" | "promptReverse" | "promptOptimize";
+export type TaskType = "text_generate" | "image_edit" | "inpaint" | "promptReverse" | "promptOptimize";
 export type TaskSource = "web" | "app" | "api";
+export type HistoryItemType = "task" | "prompt_history" | "prompt_optimize_task";
 
 export interface TaskResult {
   id: string;
@@ -74,9 +75,11 @@ export interface TaskResult {
 }
 
 export interface HistoryItem {
-  item_type: "task" | "prompt_history";
+  item_type: HistoryItemType;
   task_id?: string | null;
   history_id?: number | null;
+  style_id?: number | null;
+  style_name?: string;
   display_id?: string;
   user_id?: string;
   username?: string;
@@ -146,7 +149,9 @@ export interface TaskApiAttempt {
 
 export interface UserHistoryCard {
   history_id?: number | null;
-  item_type: "task" | "prompt_history";
+  item_type: HistoryItemType;
+  style_id?: number | null;
+  style_name?: string;
   display_id?: string;
   task_id?: string | null;
   image_id?: number | null;
@@ -236,7 +241,7 @@ export interface UserAssetListResponse {
 }
 
 export interface HistoryPinTogglePayload {
-  item_type: "task" | "prompt_history";
+  item_type: HistoryItemType;
   image_id?: number | null;
   history_id?: number | null;
 }
@@ -362,6 +367,40 @@ export interface SystemMessageCreatePayload {
   content_html: string;
   recipient_scope: SystemMessageRecipientScope;
   recipient_user_ids: string[];
+}
+
+export type PromptOptimizeStyleStatus = "enabled" | "disabled";
+
+export interface PromptOptimizeStyle {
+  id: number;
+  name: string;
+  description: string;
+  style_prompt: string;
+  sort_order: number;
+  status: PromptOptimizeStyleStatus;
+  is_default: boolean;
+  is_deleted?: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+  usage_count?: number;
+}
+
+export interface PromptOptimizeStylePayload {
+  name: string;
+  description: string;
+  style_prompt: string;
+  sort_order: number;
+  status: PromptOptimizeStyleStatus;
+  is_default: boolean;
+}
+
+export interface PublicPromptOptimizeStyle {
+  id: number;
+  name: string;
+  description: string;
+  style_prompt: string;
+  is_default: boolean;
+  sort_order: number;
 }
 
 export interface AdminUser {
@@ -961,7 +1000,7 @@ export interface AnnouncementConfig {
 
 export type ExternalApiConfigStatus = "enabled" | "disabled";
 export type ExternalApiRequestFormat = "json" | "multipart";
-export type ExternalApiSceneType = "generate" | "image_edit" | "prompt_reverse" | "inpaint";
+export type ExternalApiSceneType = "generate" | "image_edit" | "prompt_reverse" | "prompt_optimize" | "inpaint";
 
 export interface SceneOptionItem {
   label: string;

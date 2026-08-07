@@ -5,20 +5,23 @@ from sqlalchemy.orm import Session
 from app.models.external_api_scene_binding import ExternalApiSceneBinding
 from app.models.task import Task
 from app.services.external_api_config_service import SCENE_INPAINT
+from app.services.prompt_optimize_service import PROMPT_OPTIMIZE_MODE
 from app.services.prompt_reverse_service import PROMPT_REVERSE_MODE
 
 TASK_TYPE_TEXT_GENERATE = "text_generate"
 TASK_TYPE_IMAGE_EDIT = "image_edit"
 TASK_TYPE_INPAINT = "inpaint"
 TASK_TYPE_PROMPT_REVERSE = PROMPT_REVERSE_MODE
+TASK_TYPE_PROMPT_OPTIMIZE = PROMPT_OPTIMIZE_MODE
 
 
-def list_task_type_values() -> tuple[str, str, str, str]:
+def list_task_type_values() -> tuple[str, str, str, str, str]:
     return (
         TASK_TYPE_TEXT_GENERATE,
         TASK_TYPE_IMAGE_EDIT,
         TASK_TYPE_INPAINT,
         TASK_TYPE_PROMPT_REVERSE,
+        TASK_TYPE_PROMPT_OPTIMIZE,
     )
 
 
@@ -44,6 +47,8 @@ def resolve_task_type(
     normalized_model = (model or "").strip()
     if normalized_mode == PROMPT_REVERSE_MODE:
         return TASK_TYPE_PROMPT_REVERSE
+    if normalized_mode == PROMPT_OPTIMIZE_MODE:
+        return TASK_TYPE_PROMPT_OPTIMIZE
     if normalized_mode == "inpaint" or normalized_model == SCENE_INPAINT:
         return TASK_TYPE_INPAINT
     scene_type = (scene_type_map or {}).get(normalized_model, "").strip()

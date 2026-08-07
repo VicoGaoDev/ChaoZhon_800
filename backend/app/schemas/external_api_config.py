@@ -7,7 +7,7 @@ from pydantic import BaseModel, field_validator
 
 StatusType = Literal["enabled", "disabled"]
 RequestFormatType = Literal["json", "multipart"]
-SceneTypeType = Literal["generate", "image_edit", "prompt_reverse", "inpaint"]
+SceneTypeType = Literal["generate", "image_edit", "prompt_reverse", "prompt_optimize", "inpaint"]
 SceneKeyType = str
 
 

@@ -28,7 +28,7 @@ import {
   resolveImageUrl,
   resolvePreviewImageUrl,
 } from "@/api/images";
-import { deletePromptHistory } from "@/api/auth";
+import { deletePromptHistory, deletePromptOptimizeTask } from "@/api/auth";
 import AdminUserInfoDialog from "@/components/admin/AdminUserInfoDialog.vue";
 import FeedbackDialog from "@/components/feedback/FeedbackDialog.vue";
 import HistoryDetailDialog from "@/components/history/HistoryDetailDialog.vue";
@@ -204,6 +204,7 @@ function syncHistoryPolling() {
 function getHistoryQuery() {
   return {
     respect_pins: false,
+    include_prompt_reverse: !isAdminHistoryView.value,
     mode: typeFilter.value,
     source: sourceFilter.value,
     model: modelFilter.value,
@@ -326,7 +327,16 @@ function modeLabel(taskType: UserHistoryCard["task_type"]) {
   if (taskType === "image_edit") return "图编辑";
   if (taskType === "inpaint") return "局部重绘";
   if (taskType === "promptReverse") return "提示词反推";
+  if (taskType === "promptOptimize") return "提示词优化";
   return taskType;
+}
+
+function isPromptHistoryMode(mode: UserHistoryCard["mode"]) {
+  return mode === "promptReverse" || mode === "promptOptimize";
+}
+
+function isPromptHistoryItem(item: UserHistoryCard) {
+  return item.item_type === "prompt_history" || item.item_type === "prompt_optimize_task";
 }
 
 function getModelLabel(model?: string) {
@@ -415,7 +425,7 @@ function getHistoryCardMedia(item: UserHistoryCard) {
   if (isHistoryItemExpired(item)) {
     return expiredResultAsset;
   }
-  if (item.mode === "promptReverse") {
+  if (isPromptHistoryMode(item.mode)) {
     return resolvePreviewImageUrl(item.source_image_thumb || item.source_image);
   }
   if (shouldShowHistoryLargeImagePreviewNotice(item)) {
@@ -425,14 +435,14 @@ function getHistoryCardMedia(item: UserHistoryCard) {
 }
 
 function shouldShowHistoryLargeImagePreviewNotice(item: UserHistoryCard) {
-  return item.mode !== "promptReverse" && item.status === "success" && exceedsRealtimeImagePreviewLimit(item.image_size_bytes);
+  return !isPromptHistoryMode(item.mode) && item.status === "success" && exceedsRealtimeImagePreviewLimit(item.image_size_bytes);
 }
 
 function getHistoryCardPreview(item: UserHistoryCard) {
   if (isHistoryItemExpired(item)) {
     return "";
   }
-  if (item.mode === "promptReverse") {
+  if (isPromptHistoryMode(item.mode)) {
     return resolvePreviewImageUrl(item.source_image);
   }
   return getHistoryPreviewSrc(item);
@@ -520,7 +530,7 @@ function canEditHistoryImage(item: UserHistoryCard) {
 function canCreateTemplateFromHistory(item: UserHistoryCard) {
   return auth.isSuperAdmin
     && item.status === "success"
-    && item.mode !== "promptReverse"
+    && !isPromptHistoryMode(item.mode)
     && !!item.task_id
     && typeof item.image_id === "number"
     && !isHistoryItemExpired(item)
@@ -576,7 +586,7 @@ function invertVisibleSelection() {
 function getHistoryItemKey(item: UserHistoryCard) {
   if (typeof item.image_id === "number") return item.image_id;
   if (item.task_id) return item.task_id;
-  if (item.history_id) return `history-${item.history_id}`;
+  if (item.history_id) return `${item.item_type}-${item.history_id}`;
   return `${item.mode}-${item.created_at}`;
 }
 
@@ -590,9 +600,18 @@ function getHistoryPinPayload(item: UserHistoryCard) {
   }
   if (!item.history_id) return null;
   return {
-    item_type: "prompt_history" as const,
+    item_type: item.item_type,
     history_id: item.history_id,
   };
+}
+
+async function deletePromptLikeHistoryItem(item: UserHistoryCard) {
+  if (!item.history_id) return;
+  if (item.item_type === "prompt_optimize_task") {
+    await deletePromptOptimizeTask(item.history_id);
+    return;
+  }
+  await deletePromptHistory(item.history_id);
 }
 
 function isPinning(item: UserHistoryCard) {
@@ -662,14 +681,14 @@ async function handleDelete(item: UserHistoryCard) {
     return;
   }
   Modal.confirm({
-    title: item.mode === "promptReverse" ? "确认删除这条反推记录？" : "确认删除这个任务？",
-    content: item.mode === "promptReverse"
-      ? "删除后将移除这条提示词反推历史记录。"
+    title: isPromptHistoryItem(item) ? `确认删除这条${modeLabel(item.task_type)}记录？` : "确认删除这个任务？",
+    content: isPromptHistoryItem(item)
+      ? `删除后将移除这条${modeLabel(item.task_type)}历史记录。`
       : "删除后会移除该任务及其结果图，AI 生图页面和历史记录中的对应任务也会一并删除。",
     centered: true,
     async onOk() {
-      if (item.mode === "promptReverse" && item.history_id) {
-        await deletePromptHistory(item.history_id);
+      if (isPromptHistoryItem(item) && item.history_id) {
+        await deletePromptLikeHistoryItem(item);
       } else {
         if (!item.task_id) return;
         await deleteHistoryTask(item.task_id);
@@ -746,25 +765,32 @@ async function handleBatchDownload() {
 
 function getBatchDeleteTargets() {
   const promptHistoryIds = new Set<number>();
+  const promptOptimizeTaskIds = new Set<number>();
   const taskIds = new Set<string>();
   selectedItems.value.forEach((item) => {
-    if (item.mode === "promptReverse" && item.history_id) {
+    if (item.item_type === "prompt_history" && item.history_id) {
       promptHistoryIds.add(item.history_id);
+      return;
+    }
+    if (item.item_type === "prompt_optimize_task" && item.history_id) {
+      promptOptimizeTaskIds.add(item.history_id);
       return;
     }
     if (item.task_id) taskIds.add(item.task_id);
   });
   return {
     promptHistoryIds: Array.from(promptHistoryIds),
+    promptOptimizeTaskIds: Array.from(promptOptimizeTaskIds),
     taskIds: Array.from(taskIds),
   };
 }
 
 async function deleteSelectedItems() {
   const selectedBeforeDelete = selectedItems.value.slice();
-  const { promptHistoryIds, taskIds } = getBatchDeleteTargets();
+  const { promptHistoryIds, promptOptimizeTaskIds, taskIds } = getBatchDeleteTargets();
   const operations = [
     ...promptHistoryIds.map((id) => ({ key: `prompt:${id}`, run: () => deletePromptHistory(id) })),
+    ...promptOptimizeTaskIds.map((id) => ({ key: `prompt-optimize:${id}`, run: () => deletePromptOptimizeTask(id) })),
     ...taskIds.map((id) => ({ key: `task:${id}`, run: () => deleteHistoryTask(id) })),
   ];
   const results = await Promise.allSettled(operations.map((operation) => operation.run()));
@@ -774,7 +800,8 @@ async function deleteSelectedItems() {
   const successKeySet = new Set(successKeys);
   const successIds = selectedBeforeDelete
     .filter((item) => {
-      if (item.mode === "promptReverse" && item.history_id) return successKeySet.has(`prompt:${item.history_id}`);
+      if (item.item_type === "prompt_history" && item.history_id) return successKeySet.has(`prompt:${item.history_id}`);
+      if (item.item_type === "prompt_optimize_task" && item.history_id) return successKeySet.has(`prompt-optimize:${item.history_id}`);
       return !!item.task_id && successKeySet.has(`task:${item.task_id}`);
     })
     .map((item) => item.image_id)
@@ -809,7 +836,7 @@ function handleBatchDelete() {
   }
   Modal.confirm({
     title: `确认删除已选中的 ${selectedCount.value} 条历史记录？`,
-    content: "普通生图记录会删除整个任务及其结果图；提示词反推会删除对应历史记录。同一任务多张结果图只会删除一次。",
+    content: "普通生图记录会删除整个任务及其结果图；提示词工具记录会删除对应历史记录。同一任务多张结果图只会删除一次。",
     centered: true,
     async onOk() {
       await deleteSelectedItems();
@@ -825,6 +852,15 @@ function handleReedit(item: UserHistoryCard) {
         mode: "promptReverse",
         source_image: item.source_image,
         prompt: item.prompt,
+      })
+    );
+  } else if (item.mode === "promptOptimize") {
+    localStorage.setItem(
+      "generateDraftFromHistory",
+      JSON.stringify({
+        mode: "generate",
+        prompt: item.prompt,
+        reference_images: item.source_image ? [item.source_image] : [],
       })
     );
   } else if (item.mode === "inpaint") {
@@ -863,7 +899,7 @@ function handleEditImage(item: UserHistoryCard) {
     message.warning(item.status === "failed" ? "失败任务暂不支持结果图编辑" : "该任务原图已过期，暂不支持结果图编辑");
     return;
   }
-  const referenceImage = item.mode === "promptReverse"
+  const referenceImage = isPromptHistoryMode(item.mode)
     ? item.source_image
     : (item.image_url || item.preview_url || item.thumb_url || "");
   if (!referenceImage) {
@@ -912,6 +948,7 @@ function handleEditImage(item: UserHistoryCard) {
         <a-select-option value="image_edit">图编辑</a-select-option>
         <a-select-option value="inpaint">局部重绘</a-select-option>
         <a-select-option value="promptReverse">提示词反推</a-select-option>
+        <a-select-option value="promptOptimize">提示词优化</a-select-option>
       </a-select>
       <a-select v-model:value="sourceFilter" placeholder="全部来源" class="history-filter-control history-filter-select history-filter-select-sm" allow-clear>
         <a-select-option value="web">Web</a-select-option>
@@ -1073,7 +1110,7 @@ function handleEditImage(item: UserHistoryCard) {
             <img
               v-if="getHistoryCardMedia(item)"
               :src="getHistoryCardMedia(item)"
-              :alt="item.mode === 'promptReverse' ? '提示词反推原图' : item.status === 'failed' ? '生成失败' : '历史结果图'"
+              :alt="isPromptHistoryMode(item.mode) ? `${modeLabel(item.task_type)}参考图` : item.status === 'failed' ? '生成失败' : '历史结果图'"
               :class="{ 'failed-result-image': item.status === 'failed' }"
               loading="lazy"
             />
@@ -1171,7 +1208,7 @@ function handleEditImage(item: UserHistoryCard) {
                   shape="circle"
                   type="text"
                   class="history-overlay-btn"
-                  :disabled="isHistoryItemExpired(item) || !item.image_url || item.mode === 'promptReverse' || typeof item.image_id !== 'number'"
+                  :disabled="isHistoryItemExpired(item) || !item.image_url || isPromptHistoryMode(item.mode) || typeof item.image_id !== 'number'"
                   @click.stop="typeof item.image_id === 'number' && download(item.image_id, item.image_url)"
                 >
                   <template #icon><DownloadOutlined /></template>
