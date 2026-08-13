@@ -1811,7 +1811,7 @@ function convertBatchCardToHistoryCard(card: BatchGenerateCard, imageIndex = 0):
     size: card.size || "",
     resolution: card.resolution || "",
     custom_size: card.customSize || "",
-    credit_cost: 0,
+    credit_cost: resolveSceneCreditCost(card.model, card.resolution) * getCardRequestedImageCount(card),
     credit_refunded: Boolean(card.creditRefunded),
     created_at: card.createdAt || new Date().toISOString(),
     error_message: card.errorMessage || "",

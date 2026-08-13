@@ -166,6 +166,11 @@ function formatImageSize(size?: number) {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
+function getDetailCreditCost(item: UserHistoryCard) {
+  if (item.status === "failed" && item.credit_refunded) return 0;
+  return Number(item.credit_cost || 0);
+}
+
 function detailMetaList(item: UserHistoryCard) {
   return [
     `状态：${statusLabel(item.status)}`,
@@ -174,6 +179,7 @@ function detailMetaList(item: UserHistoryCard) {
     `来源：${sourceLabel(item.source)}`,
     `类型：${modeLabel(item.task_type)}`,
     `模型：${getModelLabel(item.model)}`,
+    item.item_type === "task" ? `消耗积分：${getDetailCreditCost(item)}` : "",
     item.style_name ? `风格：${item.style_name}` : "",
     `比例：${item.size || "-"}`,
     item.resolution ? `分辨率：${item.resolution}` : "",
