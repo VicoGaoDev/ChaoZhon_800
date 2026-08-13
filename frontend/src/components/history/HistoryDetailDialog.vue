@@ -12,7 +12,11 @@ import {
   resolvePreviewImageUrl,
 } from "@/api/images";
 import { withBaseUrl } from "@/lib/assets";
-import { getTaskImageFailureMessage } from "@/lib/generationErrors";
+import {
+  formatGenerationErrorMessage,
+  GENERATION_TASK_FAILURE_MESSAGE,
+  getTaskImageFailureMessage,
+} from "@/lib/generationErrors";
 import type { ImageResult, TaskApiAttempt, UserHistoryCard } from "@/types";
 
 const props = withDefaults(defineProps<{
@@ -65,6 +69,27 @@ const expiredResultAsset = `data:image/svg+xml;charset=UTF-8,${encodeURIComponen
 </svg>
 `)}`;
 
+function firstNonEmptyText(...values: Array<string | undefined | null>) {
+  for (const value of values) {
+    const text = String(value || "").trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function resolveRawErrorMessage(item: UserHistoryCard, image?: ImageResult | null) {
+  const imageError = image?.error_message
+    || item.images?.find((img) => img.status === "failed" && img.error_message)?.error_message
+    || item.images?.find((img) => img.error_message)?.error_message;
+  const attemptError = item.api_attempts?.find((attempt) => attempt.error_message)?.error_message;
+  return firstNonEmptyText(item.error_message, imageError, attemptError);
+}
+
+function isFailedHistoryItem(item: UserHistoryCard | null | undefined) {
+  if (!item) return false;
+  return item.status === "failed" || (item.images || []).some((img) => img.status === "failed");
+}
+
 const modelLabelMap = computed(() => new Map(props.modelOptions.map((item) => [item.value, item.label])));
 const requestPreviewAttempts = computed(() => (
   (props.item?.api_attempts || []).filter((attempt) => attempt.request_preview)
@@ -72,6 +97,32 @@ const requestPreviewAttempts = computed(() => (
 const showRequestPreviewSection = computed(() => (
   props.requestPreviewLoading || requestPreviewAttempts.value.length > 0
 ));
+const displayImages = computed((): ImageResult[] => {
+  const item = props.item;
+  if (!item) return [];
+  if (item.images?.length) return item.images;
+  if (isFailedHistoryItem(item)) {
+    return [{
+      id: item.image_id || 0,
+      image_url: "",
+      status: "failed",
+      error_message: item.error_message || "",
+    }];
+  }
+  return [];
+});
+const displayErrorMessage = computed(() => {
+  const item = props.item;
+  if (!item || !isFailedHistoryItem(item)) return "";
+  const raw = resolveRawErrorMessage(item);
+  if (props.showErrorMessage) {
+    return formatGenerationErrorMessage(raw, GENERATION_TASK_FAILURE_MESSAGE);
+  }
+  return getTaskImageFailureMessage(
+    item,
+    item.images?.find((img) => img.status === "failed") || item.images?.[0],
+  );
+});
 
 function formatTime(t: string) {
   return t ? dayjs(t).format("YYYY-MM-DD HH:mm:ss") : "-";
@@ -196,10 +247,6 @@ function getDetailPreviewSrc(item: UserHistoryCard, image: Pick<ImageResult, "th
   return getNestedPreviewSrc(image);
 }
 
-function getDetailFailureMessage(item: UserHistoryCard, image: ImageResult) {
-  return getTaskImageFailureMessage(item, image);
-}
-
 function openPreview(url: string) {
   if (!url) return;
   previewSrc.value = url;
@@ -295,32 +342,29 @@ function handleDownload(item: UserHistoryCard) {
               v-else
               class="detail-result-grid"
               :class="{
-                'is-single': item.images.length === 1,
-                'is-scrollable': item.images.length > 4,
+                'is-single': displayImages.length <= 1,
+                'is-scrollable': displayImages.length > 4,
               }"
             >
               <div
-                v-for="img in item.images"
+                v-for="img in displayImages"
                 :key="img.id"
                 class="detail-result-card"
                 :class="{
-                  single: item.images.length === 1,
-                  pending: !getDetailImageSrc(item, img) && img.status !== 'failed',
-                  failed: img.status === 'failed',
+                  single: displayImages.length <= 1,
+                  pending: !getDetailImageSrc(item, img) && img.status !== 'failed' && item.status !== 'failed',
+                  failed: img.status === 'failed' || item.status === 'failed',
                 }"
                 :style="{ '--detail-pending-bg-image': `url('${generateTaskCardAsset}')` }"
                 @click="getDetailPreviewSrc(item, img) && openPreview(getDetailPreviewSrc(item, img))"
               >
                 <img
-                  v-if="getDetailImageSrc(item, img) || img.status === 'failed'"
+                  v-if="getDetailImageSrc(item, img) || img.status === 'failed' || item.status === 'failed'"
                   :src="getDetailImageSrc(item, img) || failedResultAsset"
-                  :alt="img.status === 'failed' ? '生成失败' : '结果图'"
-                  :class="{ 'failed-result-image': img.status === 'failed' }"
+                  :alt="img.status === 'failed' || item.status === 'failed' ? '生成失败' : '结果图'"
+                  :class="{ 'failed-result-image': img.status === 'failed' || item.status === 'failed' }"
                   loading="lazy"
                 />
-                <div v-if="img.status === 'failed'" class="detail-failure-message">
-                  {{ getDetailFailureMessage(item, img) }}
-                </div>
                 <div v-else-if="shouldShowDetailLargeImagePreviewNotice(item, img)" class="detail-preview-notice">
                   <span>{{ LARGE_IMAGE_PREVIEW_NOTICE }}</span>
                 </div>
@@ -329,6 +373,7 @@ function handleDownload(item: UserHistoryCard) {
                 </div>
               </div>
             </div>
+            <div v-if="displayErrorMessage" class="detail-inline-error">{{ displayErrorMessage }}</div>
           </div>
         </div>
 
@@ -347,6 +392,13 @@ function handleDownload(item: UserHistoryCard) {
           <div class="detail-section">
             <div class="detail-meta">
               <span v-for="meta in detailMetaList(item)" :key="meta">{{ meta }}</span>
+            </div>
+          </div>
+
+          <div v-if="showErrorMessage && displayErrorMessage" class="detail-section">
+            <div class="detail-error-block">
+              <div class="detail-error-label">错误信息</div>
+              <div class="detail-error-message">{{ displayErrorMessage }}</div>
             </div>
           </div>
 
@@ -507,10 +559,6 @@ function handleDownload(item: UserHistoryCard) {
               </a-button>
             </div>
             <div class="detail-prompt">{{ item.prompt || "-" }}</div>
-            <div v-if="showErrorMessage && item.error_message" class="detail-error-block">
-              <div class="detail-error-label">错误信息</div>
-              <div class="detail-error-message">{{ item.error_message }}</div>
-            </div>
           </div>
         </div>
         <div v-if="showActions" class="detail-floating-actions">
@@ -850,7 +898,22 @@ function handleDownload(item: UserHistoryCard) {
 }
 
 .detail-error-block {
+  margin-top: 0;
+}
+
+.detail-inline-error {
+  flex-shrink: 0;
   margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(207, 63, 54, 0.18);
+  background: rgba(255, 242, 239, 0.96);
+  color: #cf3f36;
+  font-size: 13px;
+  line-height: 1.6;
+  font-weight: 600;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .detail-error-label {
@@ -1065,6 +1128,7 @@ function handleDownload(item: UserHistoryCard) {
 
 .detail-failure-message {
   position: absolute;
+  z-index: 4;
   left: 14px;
   right: 14px;
   bottom: 14px;
@@ -1077,6 +1141,8 @@ function handleDownload(item: UserHistoryCard) {
   font-weight: 600;
   box-shadow: 0 10px 24px rgba(207, 63, 54, 0.12);
   pointer-events: none;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .detail-meta {

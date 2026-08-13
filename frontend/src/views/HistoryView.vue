@@ -43,6 +43,7 @@ import {
 import type {
   AdminUser,
   GenerationModelOption,
+  ImageResult,
   TaskApiAttempt,
   TaskSceneConfig,
   TaskSource,
@@ -234,6 +235,24 @@ function getAttemptMergeKey(attempt: TaskApiAttempt) {
   return `${attempt.id || "attempt"}:${attempt.image_id || 0}:${attempt.attempt_index}:${attempt.api_config_id || 0}`;
 }
 
+function firstNonEmptyText(...values: Array<string | undefined | null>) {
+  for (const value of values) {
+    const text = String(value || "").trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function isSameHistoryItem(left: UserHistoryCard, right: UserHistoryCard) {
+  if (left.item_type !== right.item_type) return false;
+  if (left.task_id && right.task_id) return left.task_id === right.task_id;
+  if (left.history_id && right.history_id) return left.history_id === right.history_id;
+  if (typeof left.image_id === "number" && typeof right.image_id === "number") {
+    return left.image_id === right.image_id;
+  }
+  return false;
+}
+
 function mergeApiAttempts(nextAttempts?: TaskApiAttempt[], previousAttempts?: TaskApiAttempt[]) {
   if (!nextAttempts?.length) return previousAttempts;
   if (!previousAttempts?.length) return nextAttempts;
@@ -243,6 +262,7 @@ function mergeApiAttempts(nextAttempts?: TaskApiAttempt[], previousAttempts?: Ta
     return {
       ...previousAttempt,
       ...attempt,
+      error_message: firstNonEmptyText(attempt.error_message, previousAttempt?.error_message),
       request_preview: attempt.request_preview ?? previousAttempt?.request_preview ?? null,
     };
   });
@@ -256,17 +276,34 @@ function mergeApiAttempts(nextAttempts?: TaskApiAttempt[], previousAttempts?: Ta
   return mergedAttempts;
 }
 
+function mergeDetailImages(nextImages?: ImageResult[], previousImages?: ImageResult[]) {
+  const next = nextImages || [];
+  const previous = previousImages || [];
+  if (!next.length) return previous.length ? previous : next;
+  const previousMap = new Map(previous.map((image) => [image.id, image]));
+  return next.map((image) => {
+    const previousImage = previousMap.get(image.id);
+    return {
+      ...previousImage,
+      ...image,
+      error_message: firstNonEmptyText(image.error_message, previousImage?.error_message),
+    };
+  });
+}
+
 function mergeDetailItem(nextItem: UserHistoryCard, previousItem: UserHistoryCard) {
   return {
     ...previousItem,
     ...nextItem,
+    error_message: firstNonEmptyText(nextItem.error_message, previousItem.error_message),
+    images: mergeDetailImages(nextItem.images, previousItem.images),
     api_attempts: mergeApiAttempts(nextItem.api_attempts, previousItem.api_attempts),
   };
 }
 
 function syncDetail(list: UserHistoryCard[]) {
-  if (!detailItem.value) return;
-  const refreshedDetail = list.find((item) => item.image_id === detailItem.value?.image_id);
+  if (!detailOpen.value || !detailItem.value || detailLoading.value) return;
+  const refreshedDetail = list.find((item) => isSameHistoryItem(item, detailItem.value as UserHistoryCard));
   if (refreshedDetail) {
     detailItem.value = mergeDetailItem(refreshedDetail, detailItem.value);
   }

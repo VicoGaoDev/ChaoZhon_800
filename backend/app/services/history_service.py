@@ -87,6 +87,24 @@ def _resolve_history_card_status(task_status: str | None, image_status: str | No
     return image_status or task_status or "pending"
 
 
+def _resolve_history_error_message(task: Task, *, include_attempts: bool = False) -> str:
+    message = (task.error_message or "").strip()
+    if message:
+        return message
+    for image in task.images or []:
+        image_message = (image.error_message or "").strip()
+        if image_message:
+            return image_message
+    if include_attempts:
+        for attempt in task.api_attempts or []:
+            attempt_message = (attempt.error_message or "").strip()
+            if attempt_message:
+                return attempt_message
+    if (task.status or "") == "failed" or any((image.status or "") == "failed" for image in (task.images or [])):
+        return "生图失败"
+    return ""
+
+
 def _is_prompt_history_mode(value: str | None) -> bool:
     return (value or "").strip() in PROMPT_HISTORY_MODES
 
@@ -533,7 +551,7 @@ def _serialize_task_history_detail(
         "credit_cost": task_credit_cost,
         "credit_refunded": credit_refunded,
         "created_at": task.created_at,
-        "error_message": task.error_message or "",
+        "error_message": _resolve_history_error_message(task, include_attempts=True),
         "images": visible_images,
         "api_attempts": _serialize_task_api_attempts(
             resolved_attempts,
@@ -859,7 +877,7 @@ def get_user_history(
             "credit_cost": task_credit_cost,
             "credit_refunded": credit_refunded,
             "created_at": task.created_at,
-            "error_message": task.error_message or "",
+            "error_message": _resolve_history_error_message(task),
             "images": visible_images,
         })
 
@@ -1176,7 +1194,7 @@ def get_all_history(
             "custom_size": task.custom_size or "",
             "credit_cost": 0 if task.id in refunded_task_ids else int(task.credit_cost or 0),
             "status": task.status,
-            "error_message": task.error_message or "",
+            "error_message": _resolve_history_error_message(task),
             "task_is_deleted": bool(task.is_deleted),
             "is_soft_deleted": soft_deleted_count > 0,
             "soft_deleted_count": soft_deleted_count,
@@ -1585,7 +1603,7 @@ def get_admin_history_cards(
             "credit_refunded": credit_refunded,
             "created_at": task.created_at,
             "run_time": _calculate_task_run_time(task),
-            "error_message": task.error_message or "",
+            "error_message": _resolve_history_error_message(task),
             "images": visible_images,
         })
 
@@ -1634,7 +1652,7 @@ def get_admin_history_cards(
             "credit_refunded": False,
             "created_at": task.created_at,
             "run_time": _calculate_task_run_time(task),
-            "error_message": task.error_message or "",
+            "error_message": _resolve_history_error_message(task),
             "images": visible_images,
         })
 
@@ -1685,7 +1703,7 @@ def get_admin_history_cards(
             "credit_refunded": credit_refunded,
             "created_at": task.created_at,
             "run_time": _calculate_task_run_time(task),
-            "error_message": task.error_message or "",
+            "error_message": _resolve_history_error_message(task),
             "images": [],
         })
 
