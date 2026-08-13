@@ -2214,8 +2214,9 @@ function applyTaskSlotToCard(card: BatchGenerateCard, task: TaskResult, index: n
       };
     }
   } else if (task.status === "failed") {
+    const currentImage = card.images[index];
     card.images[index] = {
-      id: taskImage?.id || card.images[index]?.id || -(index + 1),
+      id: currentImage && currentImage.id ? currentImage.id : -(index + 1),
       image_url: "",
       status: "failed",
       error_message: task.error_message || "",
