@@ -257,7 +257,7 @@ function mergeApiAttempts(nextAttempts?: TaskApiAttempt[], previousAttempts?: Ta
   if (!nextAttempts?.length) return previousAttempts;
   if (!previousAttempts?.length) return nextAttempts;
   const previousMap = new Map(previousAttempts.map((attempt) => [getAttemptMergeKey(attempt), attempt]));
-  const mergedAttempts = nextAttempts.map((attempt) => {
+  const mergedAttempts: TaskApiAttempt[] = nextAttempts.map((attempt): TaskApiAttempt => {
     const previousAttempt = previousMap.get(getAttemptMergeKey(attempt));
     return {
       ...previousAttempt,

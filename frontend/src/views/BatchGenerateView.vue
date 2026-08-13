@@ -62,6 +62,7 @@ interface BatchGenerateCard {
   images: ImageResult[];
   errorMessage: string;
   creditRefunded: boolean;
+  netCreditCost: number | null;
   createdAt: string | null;
   dragActive: boolean;
   dragCounter: number;
@@ -93,6 +94,7 @@ interface BatchGenerateDraftCard {
   images: ImageResult[];
   errorMessage: string;
   creditRefunded: boolean;
+  netCreditCost: number | null;
   createdAt: string | null;
 }
 
@@ -434,6 +436,7 @@ function serializeCard(card: BatchGenerateCard): BatchGenerateDraftCard {
     images: card.images,
     errorMessage: card.errorMessage,
     creditRefunded: card.creditRefunded,
+    netCreditCost: card.netCreditCost,
     createdAt: card.createdAt,
   };
 }
@@ -466,6 +469,7 @@ function hydrateCardFromDraft(draft: BatchGenerateDraftCard): BatchGenerateCard 
         : (draft.status === "success" || draft.status === "idle" ? [] : createPendingImages(slotCount || 1))),
     errorMessage: draft.errorMessage || "",
     creditRefunded: Boolean(draft.creditRefunded),
+    netCreditCost: typeof draft.netCreditCost === "number" ? draft.netCreditCost : null,
     createdAt: draft.createdAt || null,
     dragActive: false,
     dragCounter: 0,
@@ -753,6 +757,17 @@ function resolveSceneCreditCost(sceneKey: string, targetResolution = "") {
   return Number(scene?.credit_cost || 0);
 }
 
+function getBatchCardBaseCreditCost(card: BatchGenerateCard) {
+  return resolveSceneCreditCost(card.model, card.resolution) * getCardRequestedImageCount(card);
+}
+
+function getBatchCardNetCreditCost(card: BatchGenerateCard) {
+  if (typeof card.netCreditCost === "number" && Number.isFinite(card.netCreditCost)) {
+    return Math.max(0, card.netCreditCost);
+  }
+  return getBatchCardBaseCreditCost(card);
+}
+
 function createEmptyCard(): BatchGenerateCard {
   const card: BatchGenerateCard = {
     id: makeId("card"),
@@ -770,6 +785,7 @@ function createEmptyCard(): BatchGenerateCard {
     images: [],
     errorMessage: "",
     creditRefunded: false,
+    netCreditCost: null,
     createdAt: null,
     dragActive: false,
     dragCounter: 0,
@@ -814,6 +830,7 @@ function createCardFromHistoryItem(item: UserHistoryCard): BatchGenerateCard {
     images: item.images.length ? item.images : createPendingImages(1),
     errorMessage: item.error_message || item.images.find((image) => image.status === "failed" && image.error_message)?.error_message || "",
     creditRefunded: Boolean(item.credit_refunded),
+    netCreditCost: Boolean(item.credit_refunded) ? 0 : Number(item.credit_cost || 0),
     createdAt: item.created_at || null,
     dragActive: false,
     dragCounter: 0,
@@ -1811,7 +1828,7 @@ function convertBatchCardToHistoryCard(card: BatchGenerateCard, imageIndex = 0):
     size: card.size || "",
     resolution: card.resolution || "",
     custom_size: card.customSize || "",
-    credit_cost: resolveSceneCreditCost(card.model, card.resolution) * getCardRequestedImageCount(card),
+    credit_cost: getBatchCardNetCreditCost(card),
     credit_refunded: Boolean(card.creditRefunded),
     created_at: card.createdAt || new Date().toISOString(),
     error_message: card.errorMessage || "",
@@ -1876,6 +1893,7 @@ function handleEditBatchGeneratedImage(card: BatchGenerateCard, image: ImageResu
   card.images = [];
   card.errorMessage = "";
   card.creditRefunded = false;
+  card.netCreditCost = null;
   normalizeCardSelections(card);
   highlightCard(card);
   message.success("结果图已加载到当前任务卡片，可继续图编辑");
@@ -1922,6 +1940,7 @@ async function removeBatchCardTask(card: BatchGenerateCard) {
     syncCardTaskIds(card, []);
     card.createdAt = null;
     card.creditRefunded = false;
+    card.netCreditCost = null;
 
     message.success("删除成功");
   } catch {
@@ -1962,6 +1981,7 @@ function duplicateCard(card: BatchGenerateCard) {
     images: [],
     errorMessage: "",
     creditRefunded: false,
+    netCreditCost: null,
     createdAt: null,
     dragActive: false,
     dragCounter: 0,
@@ -2050,6 +2070,7 @@ function queueCardsForSubmit(targetCards: BatchGenerateCard[]) {
     }
     card.errorMessage = "";
     card.creditRefunded = false;
+    card.netCreditCost = null;
     syncCardTaskIds(card, []);
     card.images = createPendingImages(getCardRequestedImageCount(card));
     card.createdAt = null;
@@ -2252,12 +2273,26 @@ function applyTaskSlotToCard(card: BatchGenerateCard, task: TaskResult, index: n
 function refreshCardFromTasks(card: BatchGenerateCard, resultMap: Map<string, TaskResult>) {
   const previousStatus = card.status;
   const slotStatuses: TaskResult["status"][] = [];
-  getCardTaskIds(card).forEach((taskId, index) => {
+  let resolvedCreditCount = 0;
+  let netCreditCost = 0;
+  let hasRefundedTask = false;
+  const taskIds = getCardTaskIds(card);
+
+  taskIds.forEach((taskId, index) => {
     const task = resultMap.get(taskId);
     if (!task) return;
     slotStatuses.push(task.status);
+    resolvedCreditCount += 1;
+    netCreditCost += Boolean(task.credit_refunded) ? 0 : Number(task.credit_cost || 0);
+    hasRefundedTask = hasRefundedTask || Boolean(task.credit_refunded);
     applyTaskSlotToCard(card, task, index);
   });
+  if (resolvedCreditCount === taskIds.length && taskIds.length) {
+    card.netCreditCost = netCreditCost;
+    card.creditRefunded = hasRefundedTask;
+  } else if (resolvedCreditCount > 0) {
+    card.creditRefunded = card.creditRefunded || hasRefundedTask;
+  }
   if (
     card.images.some((image) => image.status === "pending")
     || slotStatuses.includes("processing")
@@ -3023,6 +3058,7 @@ onBeforeUnmount(() => {
       v-model:open="detailOpen"
       :item="detailItem"
       :model-options="detailModelOptions"
+      hide-credit-cost
       show-actions
       @reedit="handleDetailReedit"
       @download="handleDetailDownload"
