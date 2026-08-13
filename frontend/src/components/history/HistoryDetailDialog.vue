@@ -291,7 +291,14 @@ function handleDownload(item: UserHistoryCard) {
                 />
               </div>
             </div>
-            <div v-else class="detail-result-grid">
+            <div
+              v-else
+              class="detail-result-grid"
+              :class="{
+                'is-single': item.images.length === 1,
+                'is-scrollable': item.images.length > 4,
+              }"
+            >
               <div
                 v-for="img in item.images"
                 :key="img.id"
@@ -739,7 +746,16 @@ function handleDownload(item: UserHistoryCard) {
 }
 
 .detail-left {
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
+}
+
+.detail-left > .detail-section {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .detail-right {
@@ -895,17 +911,39 @@ function handleDownload(item: UserHistoryCard) {
 }
 
 .detail-result-grid {
+  --detail-result-gap: 12px;
+  flex: 1;
+  min-height: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: calc((100% - var(--detail-result-gap)) / 2);
+  gap: var(--detail-result-gap);
+  align-content: start;
+  overflow-x: hidden;
+  overflow-y: hidden;
+
+  &.is-single {
+    grid-template-columns: 1fr;
+    grid-auto-rows: minmax(0, 1fr);
+    align-content: stretch;
+    overflow: hidden;
+  }
+
+  &.is-scrollable {
+    overflow-y: auto;
+    padding-right: 2px;
+  }
 }
 
 .detail-result-card {
-  height: clamp(220px, 36vh, 340px);
-  border-radius: 20px;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  box-sizing: border-box;
+  border-radius: 0;
   overflow: hidden;
-  border: 1px solid var(--theme-panel-border);
-  background: var(--theme-panel-bg-soft);
+  border: 0;
+  background: transparent;
   position: relative;
   cursor: pointer;
   transition:
@@ -922,6 +960,12 @@ function handleDownload(item: UserHistoryCard) {
   img {
     object-fit: contain;
     display: block;
+    background: var(--theme-panel-bg);
+  }
+
+  &:not(.single) {
+    border: 1px solid var(--theme-panel-border);
+    border-radius: 10px;
     background: var(--theme-panel-bg);
   }
 
@@ -947,14 +991,15 @@ function handleDownload(item: UserHistoryCard) {
     box-shadow: 0 16px 28px var(--theme-shadow-medium);
   }
 
+  &.single:not(.pending):hover {
+    transform: none;
+    box-shadow: none;
+  }
+
   &.failed img {
     object-fit: contain;
     padding: 18px;
     background: var(--theme-panel-bg);
-  }
-
-  &.single {
-    height: clamp(440px, 72vh, 680px);
   }
 }
 

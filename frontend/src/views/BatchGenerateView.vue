@@ -17,13 +17,14 @@ import {
 } from "@ant-design/icons-vue";
 import { getMe } from "@/api/auth";
 import { getTaskScenes } from "@/api/config";
-import { fetchHistory } from "@/api/history";
-import { deleteImage, getDisplayImageUrl, getDownloadUrl, getPreviewImageUrl, resolveImageUrl } from "@/api/images";
+import { deleteHistoryTask, fetchHistory } from "@/api/history";
+import { getDisplayImageUrl, getDownloadUrl, getPreviewImageUrl, resolveImageUrl } from "@/api/images";
 import { createTask, getTasks } from "@/api/tasks";
 import { uploadReferenceImage } from "@/api/upload";
 import AspectRatioPicker from "@/components/generate/AspectRatioPicker.vue";
 import OptionGridPicker from "@/components/generate/OptionGridPicker.vue";
 import FeedbackDialog from "@/components/feedback/FeedbackDialog.vue";
+import HistoryDetailDialog from "@/components/history/HistoryDetailDialog.vue";
 import {
   formatGenerationErrorMessage,
   getPreferredGenerationErrorMessage,
@@ -53,9 +54,11 @@ interface BatchGenerateCard {
   size: string;
   resolution: string;
   customSize: string;
+  numImages: number;
   referenceItems: UploadPreviewItem[];
   status: BatchCardStatus;
   taskId: string | null;
+  taskIds: string[];
   images: ImageResult[];
   errorMessage: string;
   creditRefunded: boolean;
@@ -72,6 +75,7 @@ interface GlobalBatchSettings {
   size: string;
   resolution: string;
   customSize: string;
+  numImages: number;
 }
 
 interface BatchGenerateDraftCard {
@@ -81,9 +85,11 @@ interface BatchGenerateDraftCard {
   size: string;
   resolution: string;
   customSize: string;
+  numImages: number;
   referenceImages: string[];
   status: BatchCardStatus;
   taskId: string | null;
+  taskIds: string[];
   images: ImageResult[];
   errorMessage: string;
   creditRefunded: boolean;
@@ -103,6 +109,14 @@ const openPurchaseEntry = inject<() => void>("openPurchaseEntry");
 
 const MAX_BATCH_CARDS = 12;
 const DEFAULT_BATCH_CARDS = 3;
+const MAX_IMAGES_PER_CARD = 8;
+const BATCH_IMAGE_COUNT_OPTIONS: SceneOptionItem[] = Array.from(
+  { length: MAX_IMAGES_PER_CARD },
+  (_, index) => {
+    const value = String(index + 1);
+    return { label: value, value };
+  },
+);
 const MAX_REFERENCE_FILE_SIZE = 20 * 1024 * 1024;
 const MAX_REFERENCE_FILE_SIZE_MB = MAX_REFERENCE_FILE_SIZE / (1024 * 1024);
 const MAX_REFERENCE_FILE_SIZE_TEXT = `${MAX_REFERENCE_FILE_SIZE_MB}MB`;
@@ -144,12 +158,17 @@ const globalSettings = ref<GlobalBatchSettings>({
   size: "",
   resolution: "",
   customSize: "",
+  numImages: 1,
 });
 const aspectRatioAutoDetectEnabled = ref(readStoredAspectRatioAutoDetectEnabled());
 const globalReferenceItems = ref<UploadPreviewItem[]>([]);
 const taskPollingInFlight = ref(false);
 const previewVisible = ref(false);
 const previewCurrent = ref("");
+const detailOpen = ref(false);
+const detailItem = ref<UserHistoryCard | null>(null);
+const detailCardId = ref("");
+const detailImageIndex = ref(0);
 const feedbackDialogOpen = ref(false);
 const feedbackTarget = ref<{
   taskId: string;
@@ -173,7 +192,7 @@ const pendingPastePreviewUrls = ref<string[]>([]);
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let queueTimer: ReturnType<typeof setTimeout> | null = null;
-let submissionInFlight = false;
+let submissionInFlightCount = 0;
 let unbindGlobalReferenceDragHandlers: (() => void) | null = null;
 const unbindCardReferenceDragHandlers = new Map<string, () => void>();
 
@@ -188,11 +207,133 @@ function revokeObjectUrl(url?: string) {
 }
 
 function createPendingImages(count = 1): ImageResult[] {
-  return Array.from({ length: count }, (_, index) => ({
+  return Array.from({ length: Math.max(0, count) }, (_, index) => ({
     id: -(Date.now() + index),
     image_url: "",
     status: "pending",
   }));
+}
+
+function createFailedImages(count = 1, errorMessage = ""): ImageResult[] {
+  return Array.from({ length: Math.max(0, count) }, (_, index) => ({
+    id: -(Date.now() + index),
+    image_url: "",
+    status: "failed",
+    error_message: errorMessage,
+  }));
+}
+
+function normalizeFailedCardImages(card: BatchGenerateCard) {
+  if (card.status !== "failed") return;
+  const count = Math.max(getCardRequestedImageCount(card), card.images.length, 1);
+  if (!card.images.length) {
+    card.images = createFailedImages(count, card.errorMessage);
+    return;
+  }
+  card.images = card.images.map((image) => {
+    if (image.status !== "pending") return image;
+    return {
+      ...image,
+      status: "failed",
+      error_message: image.error_message || card.errorMessage || "生成失败",
+    };
+  });
+}
+
+function normalizeNumImages(value: unknown, fallback = 1) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(MAX_IMAGES_PER_CARD, Math.max(1, Math.round(parsed)));
+}
+
+function getCardTaskIds(card: Pick<BatchGenerateCard, "taskId" | "taskIds">) {
+  const ids = Array.isArray(card.taskIds)
+    ? card.taskIds.map((id) => String(id || "").trim()).filter(Boolean)
+    : [];
+  if (ids.length) return Array.from(new Set(ids));
+  const fallback = String(card.taskId || "").trim();
+  return fallback ? [fallback] : [];
+}
+
+function syncCardTaskIds(card: BatchGenerateCard, taskIds: string[]) {
+  const normalized = Array.from(new Set(taskIds.map((id) => String(id || "").trim()).filter(Boolean)));
+  card.taskIds = normalized;
+  card.taskId = normalized[0] || null;
+}
+
+function getCardRequestedImageCount(card: BatchGenerateCard) {
+  return normalizeNumImages(card.numImages);
+}
+
+function isRemoteActiveCard(card: BatchGenerateCard) {
+  if (card.status === "failed" || card.status === "idle" || card.status === "queued_local") return false;
+  return ["submitting", "pending", "queued", "processing"].includes(card.status)
+    || card.images.some((image) => image.status === "pending");
+}
+
+function getCardActiveImageCount(card: BatchGenerateCard) {
+  if (!isRemoteActiveCard(card)) return 0;
+  const pendingCount = card.images.filter((image) => image.status === "pending").length;
+  if (pendingCount > 0) return pendingCount;
+  const taskIds = getCardTaskIds(card);
+  if (taskIds.length) return taskIds.length;
+  return getCardRequestedImageCount(card);
+}
+
+function getSuccessImages(card: BatchGenerateCard) {
+  return card.images.filter((image) => (
+    image.status === "success" && Boolean(image.image_url || image.preview_url)
+  ));
+}
+
+function getSlotTaskId(card: BatchGenerateCard, index: number) {
+  return getCardTaskIds(card)[index] || "";
+}
+
+function ensureCardImageSlots(card: BatchGenerateCard, count: number) {
+  const nextCount = Math.max(0, count);
+  if (card.images.length === nextCount) return;
+  if (card.images.length > nextCount) {
+    card.images = card.images.slice(0, nextCount);
+    return;
+  }
+  card.images = [...card.images, ...createPendingImages(nextCount - card.images.length)];
+}
+
+function hasIncompleteCardSlots(card: BatchGenerateCard) {
+  if (card.status === "failed" || card.status === "idle" || card.status === "queued_local") return false;
+  if (!getCardTaskIds(card).length) return false;
+  if (["submitting", "pending", "queued", "processing"].includes(card.status)) return true;
+  if (card.images.some((image) => image.status === "pending")) return true;
+  return card.status === "success" && !getSuccessImages(card).length;
+}
+
+function refreshCardAggregateStatus(card: BatchGenerateCard) {
+  if (["idle", "queued_local"].includes(card.status) && !getCardTaskIds(card).length) return;
+
+  const images = card.images;
+  if (!images.length) return;
+
+  const hasPending = images.some((image) => image.status === "pending");
+  const successCount = images.filter((image) => image.status === "success").length;
+  const failedCount = images.filter((image) => image.status === "failed").length;
+
+  if (hasPending) {
+    if (!["submitting", "pending", "queued", "processing"].includes(card.status)) {
+      card.status = "processing";
+    }
+    return;
+  }
+
+  if (failedCount === images.length) {
+    card.status = "failed";
+    return;
+  }
+
+  if (successCount > 0) {
+    card.status = "success";
+    if (failedCount === 0) card.errorMessage = "";
+  }
 }
 
 function createReferenceItemFromRemote(url: string): UploadPreviewItem {
@@ -275,6 +416,7 @@ function cloneSuccessReferenceItems(items: UploadPreviewItem[]) {
 }
 
 function serializeCard(card: BatchGenerateCard): BatchGenerateDraftCard {
+  const taskIds = getCardTaskIds(card);
   return {
     sceneType: card.sceneType,
     prompt: card.prompt,
@@ -282,11 +424,13 @@ function serializeCard(card: BatchGenerateCard): BatchGenerateDraftCard {
     size: card.size,
     resolution: card.resolution,
     customSize: card.customSize,
+    numImages: getCardRequestedImageCount(card),
     referenceImages: card.referenceItems
       .filter((item) => item.status === "success" && item.remoteUrl)
       .map((item) => item.remoteUrl),
     status: card.status,
-    taskId: card.taskId,
+    taskId: taskIds[0] || null,
+    taskIds,
     images: card.images,
     errorMessage: card.errorMessage,
     creditRefunded: card.creditRefunded,
@@ -295,6 +439,11 @@ function serializeCard(card: BatchGenerateCard): BatchGenerateDraftCard {
 }
 
 function hydrateCardFromDraft(draft: BatchGenerateDraftCard): BatchGenerateCard {
+  const taskIds = Array.isArray(draft.taskIds) && draft.taskIds.length
+    ? Array.from(new Set(draft.taskIds.map((id) => String(id || "").trim()).filter(Boolean)))
+    : (draft.taskId ? [String(draft.taskId)] : []);
+  const numImages = normalizeNumImages(draft.numImages, Math.max(taskIds.length, draft.images?.length || 1, 1));
+  const slotCount = Math.max(taskIds.length, Array.isArray(draft.images) ? draft.images.length : 0, draft.status === "idle" ? 0 : numImages);
   const card: BatchGenerateCard = {
     id: makeId("draft-card"),
     sceneType: draft.sceneType,
@@ -303,14 +452,18 @@ function hydrateCardFromDraft(draft: BatchGenerateDraftCard): BatchGenerateCard 
     size: draft.size || "",
     resolution: draft.resolution || "",
     customSize: draft.customSize || "",
+    numImages,
     referenceItems: Array.isArray(draft.referenceImages)
       ? draft.referenceImages.map((url) => createReferenceItemFromRemote(url))
       : [],
     status: draft.status,
-    taskId: draft.taskId,
+    taskId: taskIds[0] || null,
+    taskIds,
     images: Array.isArray(draft.images) && draft.images.length
       ? draft.images
-      : (draft.status === "success" ? [] : createPendingImages(1)),
+      : (draft.status === "failed"
+        ? createFailedImages(slotCount || numImages, draft.errorMessage || "")
+        : (draft.status === "success" || draft.status === "idle" ? [] : createPendingImages(slotCount || 1))),
     errorMessage: draft.errorMessage || "",
     creditRefunded: Boolean(draft.creditRefunded),
     createdAt: draft.createdAt || null,
@@ -318,6 +471,7 @@ function hydrateCardFromDraft(draft: BatchGenerateDraftCard): BatchGenerateCard 
     dragCounter: 0,
     highlighted: false,
   };
+  normalizeFailedCardImages(card);
   normalizeCardSelections(card);
   return card;
 }
@@ -336,7 +490,7 @@ function isCardMeaningfulForDraft(card: BatchGenerateCard) {
   return Boolean(
     card.prompt.trim()
     || card.referenceItems.some((item) => item.status === "success" && item.remoteUrl)
-    || card.taskId
+    || getCardTaskIds(card).length
     || card.images.length
     || card.errorMessage
     || card.status !== "idle",
@@ -385,6 +539,7 @@ function restoreBatchGenerateDraft() {
         size: draft.globalSettings.size || "",
         resolution: draft.globalSettings.resolution || "",
         customSize: draft.globalSettings.customSize || "",
+        numImages: normalizeNumImages(draft.globalSettings.numImages, 1),
       };
     }
     globalReferenceItems.value = Array.isArray(draft.globalReferenceImages)
@@ -463,22 +618,29 @@ function getDefaultModelKey(sceneType: BatchSceneMode) {
 }
 
 const userCredits = computed(() => Number(auth.user?.credits || 0));
-const activeRemoteCardCount = computed(() => cards.value.filter((card) => (
-  ["submitting", "pending", "queued", "processing"].includes(card.status)
-)).length);
-const queuedLocalCount = computed(() => cards.value.filter((card) => card.status === "queued_local").length);
-const remainingSlots = computed(() => Math.max(MAX_BATCH_CARDS - activeRemoteCardCount.value, 0));
+const activeRemoteImageCount = computed(() => cards.value.reduce((total, card) => (
+  total + getCardActiveImageCount(card)
+), 0));
+const remainingSlots = computed(() => Math.max(MAX_BATCH_CARDS - activeRemoteImageCount.value, 0));
+const remainingSubmissionSlots = computed(() => Math.max(MAX_BATCH_CARDS - submissionInFlightCount, 0));
 const canAddMoreCards = computed(() => cards.value.length < MAX_BATCH_CARDS);
 const hasFinishedCards = computed(() => cards.value.some((card) => ["success", "failed"].includes(card.status)));
 const globalUploading = computed(() => globalReferenceItems.value.some((item) => item.status === "uploading"));
 const pasteEligibleCards = computed(() => cards.value.filter((card) => card.sceneType === "image_edit" && !isCardLocked(card)));
-const downloadableImages = computed(() => cards.value
-  .map((card) => getPrimaryImage(card))
-  .filter((image): image is ImageResult => Boolean(image && image.image_url)));
+const downloadableImages = computed(() => cards.value.flatMap((card) => getSuccessImages(card)));
 const estimatedCreditTotal = computed(() => cards.value.reduce((total, card) => {
   if (!card.model) return total;
-  return total + resolveSceneCreditCost(card.model, card.resolution);
+  return total + resolveSceneCreditCost(card.model, card.resolution) * getCardRequestedImageCount(card);
 }, 0));
+const detailModelOptions = computed(() => (
+  taskScenes.value.map((scene) => ({
+    label: scene.scene_label,
+    value: scene.scene_key,
+  }))
+));
+const detailableCards = computed(() => cards.value.filter((card) => (
+  card.images.length > 0 || card.status !== "idle"
+)));
 
 function getModelOption(modelKey: string) {
   return generationModels.value.find((item) => item.model_key === modelKey) || null;
@@ -600,9 +762,11 @@ function createEmptyCard(): BatchGenerateCard {
     size: globalSettings.value.size,
     resolution: globalSettings.value.resolution,
     customSize: globalSettings.value.customSize,
+    numImages: normalizeNumImages(globalSettings.value.numImages, 1),
     referenceItems: cloneSuccessReferenceItems(globalReferenceItems.value),
     status: "idle",
     taskId: null,
+    taskIds: [],
     images: [],
     errorMessage: "",
     creditRefunded: false,
@@ -630,7 +794,7 @@ function createCardFromHistoryItem(item: UserHistoryCard): BatchGenerateCard {
   )
     ? "image_edit"
     : "generate";
-  const fallbackImageCount = Math.max(1, Number(item.num_images || item.images.length || 1));
+  const taskIds = item.task_id ? [item.task_id] : [];
 
   const card: BatchGenerateCard = {
     id: makeId("history-card"),
@@ -640,12 +804,14 @@ function createCardFromHistoryItem(item: UserHistoryCard): BatchGenerateCard {
     size: item.size || "",
     resolution: item.resolution || "",
     customSize: item.custom_size || "",
+    numImages: 1,
     referenceItems: hasReferenceImages
       ? item.reference_images.map((url) => createReferenceItemFromRemote(url))
       : [],
     status: item.status,
-    taskId: item.task_id || null,
-    images: item.images.length ? item.images : createPendingImages(fallbackImageCount),
+    taskId: taskIds[0] || null,
+    taskIds,
+    images: item.images.length ? item.images : createPendingImages(1),
     errorMessage: item.error_message || item.images.find((image) => image.status === "failed" && image.error_message)?.error_message || "",
     creditRefunded: Boolean(item.credit_refunded),
     createdAt: item.created_at || null,
@@ -684,6 +850,9 @@ function normalizeCardSelections(card: BatchGenerateCard) {
   card.size = hideAspectRatio(card.model) ? "" : normalizeSelectedValue(card.size, sizeOptions);
   card.resolution = hideResolution(card.model) ? "" : normalizeSelectedValue(card.resolution, resolutionOptions);
   card.customSize = hideCustomSize(card.model) ? "" : normalizeSelectedValue(card.customSize, customSizeOptions);
+  card.numImages = normalizeNumImages(card.numImages, 1);
+  card.taskIds = getCardTaskIds(card);
+  card.taskId = card.taskIds[0] || null;
   card.referenceItems = normalizeReferenceLimit(card.referenceItems, card.model);
 }
 
@@ -710,6 +879,7 @@ function normalizeGlobalSelections() {
   globalSettings.value.customSize = hideCustomSize(globalSettings.value.model)
     ? ""
     : normalizeSelectedValue(globalSettings.value.customSize, customSizeOptions);
+  globalSettings.value.numImages = normalizeNumImages(globalSettings.value.numImages, 1);
   globalReferenceItems.value = normalizeReferenceLimit(globalReferenceItems.value, globalSettings.value.model);
 }
 
@@ -729,12 +899,14 @@ async function loadActiveHistoryCards() {
   if (!auth.isLoggedIn || !generationModels.value.length) return;
 
   try {
+    const currentUserId = String(auth.user?.id || "").trim();
     const seenTaskIds = new Set<string>();
     const activeHistoryItems: UserHistoryCard[] = [];
     let page = 1;
     let total = Infinity;
+    const maxHistoryItems = MAX_BATCH_CARDS * MAX_IMAGES_PER_CARD;
 
-    while (activeHistoryItems.length < MAX_BATCH_CARDS && activeHistoryItems.length < total) {
+    while (activeHistoryItems.length < maxHistoryItems && activeHistoryItems.length < total) {
       const res = await fetchHistory(page, ACTIVE_BATCH_HISTORY_PAGE_SIZE, {
         respect_pins: false,
         include_prompt_reverse: false,
@@ -743,7 +915,8 @@ async function loadActiveHistoryCards() {
       if (!res.items.length) break;
 
       res.items.forEach((item) => {
-        if (activeHistoryItems.length >= MAX_BATCH_CARDS) return;
+        if (activeHistoryItems.length >= maxHistoryItems) return;
+        if (currentUserId && String(item.user_id || "").trim() && String(item.user_id || "").trim() !== currentUserId) return;
         if (item.mode === "promptReverse" || !item.task_id || seenTaskIds.has(item.task_id)) return;
         if (!["pending", "queued", "processing"].includes(item.status)) return;
         seenTaskIds.add(item.task_id);
@@ -755,28 +928,38 @@ async function loadActiveHistoryCards() {
 
     if (!activeHistoryItems.length) return;
 
-    const historyCards = activeHistoryItems.map(createCardFromHistoryItem);
-    const existingCardsByTaskId = new Map(
-      cards.value
-        .filter((card) => card.taskId)
-        .map((card) => [String(card.taskId), card]),
-    );
+    const existingCardsByTaskId = new Map<string, BatchGenerateCard>();
+    cards.value.forEach((card) => {
+      getCardTaskIds(card).forEach((taskId) => {
+        existingCardsByTaskId.set(taskId, card);
+      });
+    });
 
-    historyCards.forEach((historyCard) => {
-      const existingCard = historyCard.taskId ? existingCardsByTaskId.get(String(historyCard.taskId)) : null;
-      if (!existingCard) {
-        if (cards.value.length < MAX_BATCH_CARDS) {
-          cards.value.push(historyCard);
+    activeHistoryItems.forEach((item) => {
+      const taskId = String(item.task_id || "").trim();
+      if (!taskId) return;
+
+      const existingCard = existingCardsByTaskId.get(taskId);
+      if (existingCard) {
+        const slotIndex = getCardTaskIds(existingCard).indexOf(taskId);
+        if (slotIndex >= 0) {
+          ensureCardImageSlots(existingCard, getCardTaskIds(existingCard).length);
+          if (item.images.length) {
+            existingCard.images[slotIndex] = item.images[0];
+          }
+          existingCard.creditRefunded = existingCard.creditRefunded || Boolean(item.credit_refunded);
+          if (!existingCard.createdAt && item.created_at) {
+            existingCard.createdAt = item.created_at;
+          }
+          refreshCardAggregateStatus(existingCard);
         }
         return;
       }
 
-      existingCard.status = historyCard.status;
-      existingCard.images = historyCard.images;
-      existingCard.errorMessage = historyCard.errorMessage;
-      existingCard.creditRefunded = historyCard.creditRefunded;
-      existingCard.createdAt = historyCard.createdAt;
-      existingCard.taskId = historyCard.taskId;
+      if (cards.value.length >= MAX_BATCH_CARDS) return;
+      const historyCard = createCardFromHistoryItem(item);
+      cards.value.push(historyCard);
+      getCardTaskIds(historyCard).forEach((id) => existingCardsByTaskId.set(id, historyCard));
     });
     ensurePolling();
 
@@ -808,6 +991,17 @@ watch(
   },
   { deep: true },
 );
+
+watch(cards, () => {
+  if (!detailOpen.value || !detailCardId.value) return;
+  const card = cards.value.find((item) => item.id === detailCardId.value);
+  if (!card) {
+    detailOpen.value = false;
+    detailItem.value = null;
+    return;
+  }
+  detailItem.value = convertBatchCardToHistoryCard(card, detailImageIndex.value);
+}, { deep: true });
 
 function setGlobalReferenceUploadBlockRef(el: unknown) {
   unbindGlobalReferenceDragHandlers?.();
@@ -1521,6 +1715,10 @@ function applyGlobalSettingsToAll() {
       card.customSize = globalSettings.value.customSize;
       appliedFieldCount += 1;
     }
+    if (globalSettings.value.numImages) {
+      card.numImages = normalizeNumImages(globalSettings.value.numImages, 1);
+      appliedFieldCount += 1;
+    }
     if (successReferences.length) {
       card.referenceItems.forEach((item) => revokeObjectUrl(item.objectUrl));
       card.referenceItems = cloneSuccessReferenceItems(successReferences);
@@ -1576,6 +1774,82 @@ function openPreview(image?: ImageResult) {
   previewVisible.value = true;
 }
 
+function toHistoryCardStatus(status: BatchCardStatus): UserHistoryCard["status"] {
+  if (status === "queued_local" || status === "submitting" || status === "idle") return "pending";
+  return status;
+}
+
+function convertBatchCardToHistoryCard(card: BatchGenerateCard, imageIndex = 0): UserHistoryCard {
+  const focusedImage = card.images[imageIndex] || card.images.find((image) => image.status === "success") || card.images[0];
+  const referenceUrls = buildReferenceUrls(card.referenceItems);
+  const taskId = getSlotTaskId(card, imageIndex) || getCardTaskIds(card)[0] || null;
+
+  return {
+    item_type: "task",
+    display_id: taskId || card.id,
+    task_id: taskId,
+    image_id: typeof focusedImage?.id === "number" && focusedImage.id > 0 ? focusedImage.id : null,
+    is_pinned: false,
+    image_url: focusedImage?.image_url || "",
+    preview_url: focusedImage?.preview_url,
+    thumb_url: focusedImage?.thumb_url,
+    status: toHistoryCardStatus(card.status),
+    image_format: focusedImage?.image_format,
+    image_size_bytes: focusedImage?.image_size_bytes,
+    task_type: card.sceneType === "image_edit" ? "image_edit" : "text_generate",
+    model: card.model || "",
+    source: "web",
+    mode: "generate",
+    prompt: card.prompt || "",
+    reference_images: [...referenceUrls],
+    reference_image_thumbs: [...referenceUrls],
+    source_image: "",
+    source_image_thumb: "",
+    mask_image: "",
+    mask_image_thumb: "",
+    num_images: Math.max(getCardRequestedImageCount(card), card.images.length, 1),
+    size: card.size || "",
+    resolution: card.resolution || "",
+    custom_size: card.customSize || "",
+    credit_cost: 0,
+    credit_refunded: Boolean(card.creditRefunded),
+    created_at: card.createdAt || new Date().toISOString(),
+    error_message: card.errorMessage || "",
+    images: card.images.length ? [...card.images] : [],
+  };
+}
+
+function openBatchTaskDetail(card: BatchGenerateCard, imageIndex = 0) {
+  const focusedIndex = Math.max(0, Math.min(imageIndex, Math.max(card.images.length - 1, 0)));
+  detailCardId.value = card.id;
+  detailImageIndex.value = focusedIndex;
+  detailItem.value = convertBatchCardToHistoryCard(card, focusedIndex);
+  detailOpen.value = true;
+}
+
+function handleDetailReedit(item: UserHistoryCard) {
+  const card = cards.value.find((entry) => entry.id === detailCardId.value);
+  detailOpen.value = false;
+  if (!card) return;
+  const focusedImage = typeof item.image_id === "number"
+    ? card.images.find((image) => image.id === item.image_id)
+    : card.images[detailImageIndex.value];
+  if (focusedImage && canEditBatchGeneratedImage(card, focusedImage)) {
+    handleEditBatchGeneratedImage(card, focusedImage);
+    return;
+  }
+  highlightCard(card);
+}
+
+async function handleDetailDownload(item: UserHistoryCard) {
+  if (typeof item.image_id !== "number" || !item.image_url) return;
+  try {
+    await downloadBlob(item.image_id, item.image_url, item.preview_url);
+  } catch {
+    message.error("下载失败，请重试");
+  }
+}
+
 function refreshCurrentUser() {
   return getMe().then((user) => auth.updateUser(user)).catch(() => {});
 }
@@ -1597,7 +1871,7 @@ function handleEditBatchGeneratedImage(card: BatchGenerateCard, image: ImageResu
   }
   card.referenceItems.forEach((item) => revokeObjectUrl(item.objectUrl));
   card.referenceItems = [createReferenceItemFromRemote(referenceImage)];
-  card.taskId = null;
+  syncCardTaskIds(card, []);
   card.status = "idle";
   card.images = [];
   card.errorMessage = "";
@@ -1607,14 +1881,16 @@ function handleEditBatchGeneratedImage(card: BatchGenerateCard, image: ImageResu
   message.success("结果图已加载到当前任务卡片，可继续图编辑");
 }
 
-function openFeedbackDialogForBatchCard(card: BatchGenerateCard) {
-  if (!card.taskId || card.status !== "success") {
+function openFeedbackDialogForBatchCard(card: BatchGenerateCard, imageIndex = 0) {
+  const taskId = getSlotTaskId(card, imageIndex) || getCardTaskIds(card)[0];
+  const image = card.images[imageIndex];
+  if (!taskId || (image && image.status === "pending")) {
     message.warning("当前任务尚未生成完成，暂时无法提交反馈");
     return;
   }
 
   feedbackTarget.value = {
-    taskId: card.taskId,
+    taskId,
     model: card.model,
     prompt: card.prompt,
     createdAt: card.createdAt || new Date().toISOString(),
@@ -1622,35 +1898,30 @@ function openFeedbackDialogForBatchCard(card: BatchGenerateCard) {
   feedbackDialogOpen.value = true;
 }
 
-function canDeleteBatchCardImage(card: BatchGenerateCard, image: ImageResult) {
-  return Boolean(card.taskId && image.id > 0 && (image.status === "success" || image.status === "failed"));
+function canDeleteBatchCardTask(card: BatchGenerateCard) {
+  return Boolean(getCardTaskIds(card).length && (card.status === "success" || card.status === "failed"));
 }
 
-async function removeBatchCardImage(card: BatchGenerateCard, image: ImageResult) {
-  if (!canDeleteBatchCardImage(card, image)) {
-    message.warning("当前图片暂不支持删除");
+async function deleteCardTasks(card: BatchGenerateCard) {
+  const taskIds = getCardTaskIds(card);
+  if (!taskIds.length) return;
+  await Promise.allSettled(taskIds.map((taskId) => deleteHistoryTask(taskId)));
+}
+
+async function removeBatchCardTask(card: BatchGenerateCard) {
+  if (!canDeleteBatchCardTask(card) || !getCardTaskIds(card).length) {
+    message.warning("当前任务暂不支持删除");
     return;
   }
 
   try {
-    await deleteImage(image.id);
-    card.images = card.images.filter((item) => item.id !== image.id);
-
-    if (!card.images.length) {
-      card.status = "idle";
-      card.errorMessage = "";
-      card.taskId = null;
-      card.createdAt = null;
-      card.creditRefunded = false;
-    } else if (!card.images.some((item) => item.status === "success")) {
-      card.status = "failed";
-      card.errorMessage = getPreferredGenerationErrorMessage(
-        card.errorMessage,
-        card.images.find((item) => item.status === "failed")?.error_message,
-        Boolean(card.creditRefunded),
-        "生成失败，请重试",
-      );
-    }
+    await deleteCardTasks(card);
+    card.images = [];
+    card.status = "idle";
+    card.errorMessage = "";
+    syncCardTaskIds(card, []);
+    card.createdAt = null;
+    card.creditRefunded = false;
 
     message.success("删除成功");
   } catch {
@@ -1658,13 +1929,13 @@ async function removeBatchCardImage(card: BatchGenerateCard, image: ImageResult)
   }
 }
 
-function confirmRemoveBatchCardImage(card: BatchGenerateCard, image: ImageResult) {
+function confirmRemoveBatchCardTask(card: BatchGenerateCard) {
   Modal.confirm({
-    title: "确认删除这张图片？",
-    content: "删除后会移除当前任务卡片中的这张结果图。",
+    title: "确认删除这个任务？",
+    content: "删除后会移除当前任务卡片中的全部结果图。",
     centered: true,
     async onOk() {
-      await removeBatchCardImage(card, image);
+      await removeBatchCardTask(card);
     },
   });
 }
@@ -1683,9 +1954,11 @@ function duplicateCard(card: BatchGenerateCard) {
     size: card.size,
     resolution: card.resolution,
     customSize: card.customSize,
+    numImages: getCardRequestedImageCount(card),
     referenceItems: cloneSuccessReferenceItems(card.referenceItems),
     status: "idle",
     taskId: null,
+    taskIds: [],
     images: [],
     errorMessage: "",
     creditRefunded: false,
@@ -1777,8 +2050,8 @@ function queueCardsForSubmit(targetCards: BatchGenerateCard[]) {
     }
     card.errorMessage = "";
     card.creditRefunded = false;
-    card.taskId = null;
-    card.images = [];
+    syncCardTaskIds(card, []);
+    card.images = createPendingImages(getCardRequestedImageCount(card));
     card.createdAt = null;
     card.status = "queued_local";
     queuedCount += 1;
@@ -1816,11 +2089,11 @@ function startSingleCard(card: BatchGenerateCard) {
   }
 }
 
-function buildCreateTaskPayload(card: BatchGenerateCard) {
+function buildCreateTaskPayload(card: BatchGenerateCard, numImages: number) {
   return {
     model: card.model,
     prompt: card.prompt.trim(),
-    num_images: 1,
+    num_images: numImages,
     size: hideAspectRatio(card.model) ? "" : card.size,
     resolution: hideResolution(card.model) ? "" : card.resolution,
     custom_size: hideCustomSize(card.model) ? "" : card.customSize,
@@ -1831,19 +2104,27 @@ function buildCreateTaskPayload(card: BatchGenerateCard) {
   };
 }
 
-async function submitCard(card: BatchGenerateCard) {
+async function submitCard(card: BatchGenerateCard, requestedCount = getCardRequestedImageCount(card)) {
+  const imageCount = normalizeNumImages(requestedCount, 1);
   card.status = "submitting";
   card.errorMessage = "";
-  card.images = createPendingImages(1);
+  card.images = createPendingImages(imageCount);
+  syncCardTaskIds(card, []);
 
   try {
-    const res = await createTask(buildCreateTaskPayload(card));
-    const taskId = res.task_id || res.task_ids?.[0];
-    if (!taskId) {
+    const res = await createTask(buildCreateTaskPayload(card, imageCount));
+    const taskIds = res.task_ids?.length
+      ? res.task_ids.map((id) => String(id || "").trim()).filter(Boolean)
+      : (res.task_id ? [String(res.task_id)] : []);
+    if (!taskIds.length) {
       throw new Error("服务端没有返回任务 ID");
     }
 
-    card.taskId = taskId;
+    syncCardTaskIds(card, taskIds);
+    ensureCardImageSlots(card, taskIds.length);
+    if (taskIds.length < imageCount) {
+      message.info(`当前剩余 ${taskIds.length} 个生成名额，已自动发起 ${taskIds.length} 个任务`);
+    }
     card.status = "pending";
     card.createdAt = new Date().toISOString();
     ensurePolling();
@@ -1852,41 +2133,61 @@ async function submitCard(card: BatchGenerateCard) {
     const detail = String(err?.response?.data?.detail || err?.message || "");
     if (isInsufficientCreditsError(err)) {
       card.status = "failed";
-      card.images = [];
       card.errorMessage = formatGenerationErrorMessage(detail, "积分不足");
+      card.images = createFailedImages(imageCount, card.errorMessage);
       showInsufficientCreditsPurchase(detail);
       return;
     }
 
     if (isSubmissionLimitError(err)) {
       card.status = "queued_local";
-      card.images = [];
+      card.images = createPendingImages(imageCount);
       card.errorMessage = "当前提交较频繁，系统会自动稍后重试";
       scheduleQueuePump(SUBMISSION_RETRY_DELAY_MS);
       return;
     }
 
     card.status = "failed";
-    card.images = [];
     card.errorMessage = formatGenerationErrorMessage(detail, "创建任务失败");
+    card.images = createFailedImages(imageCount, card.errorMessage);
   }
 }
 
 async function pumpQueue() {
-  if (submissionInFlight) return;
-  if (remainingSlots.value <= 0) return;
+  const availableSlots = Math.min(remainingSlots.value, remainingSubmissionSlots.value);
+  if (availableSlots <= 0) return;
 
-  const nextCard = cards.value.find((card) => card.status === "queued_local");
-  if (!nextCard) return;
+  const queuedCards = cards.value.filter((card) => card.status === "queued_local");
+  if (!queuedCards.length) return;
 
-  submissionInFlight = true;
+  const allocations: Array<{ card: BatchGenerateCard; count: number }> = [];
+  let remaining = availableSlots;
+  queuedCards.forEach((card) => {
+    if (remaining <= 0) return;
+    const requested = getCardRequestedImageCount(card);
+    const count = Math.min(requested, remaining);
+    if (count <= 0) return;
+    if (count < requested) {
+      message.info(`当前剩余 ${count} 个生成名额，已自动为「${getCardTaskLabel(card)}」发起 ${count} 个任务`);
+    }
+    allocations.push({ card, count });
+    remaining -= count;
+  });
+  if (!allocations.length) return;
+
+  const inFlightCount = allocations.reduce((total, item) => total + item.count, 0);
+  submissionInFlightCount += inFlightCount;
   try {
-    await submitCard(nextCard);
+    await Promise.all(allocations.map(({ card, count }) => submitCard(card, count)));
   } finally {
-    submissionInFlight = false;
+    submissionInFlightCount = Math.max(0, submissionInFlightCount - inFlightCount);
   }
 
-  if (cards.value.some((card) => card.status === "queued_local") && remainingSlots.value > 0) {
+  if (
+    cards.value.some((card) => card.status === "queued_local")
+    && remainingSlots.value > 0
+    && remainingSubmissionSlots.value > 0
+  ) {
     scheduleQueuePump(350);
   }
 }
@@ -1899,31 +2200,82 @@ function scheduleQueuePump(delay = 0) {
   }, delay);
 }
 
-function applyTaskResultToCard(card: BatchGenerateCard, task: TaskResult) {
-  card.taskId = task.id;
-  card.createdAt = task.created_at;
-  card.creditRefunded = Boolean(task.credit_refunded);
-  card.status = task.status;
-  card.images = task.images?.length
-    ? task.images
-    : (["pending", "queued", "processing"].includes(task.status) ? createPendingImages(1) : []);
+function applyTaskSlotToCard(card: BatchGenerateCard, task: TaskResult, index: number) {
+  ensureCardImageSlots(card, Math.max(card.images.length, index + 1, getCardTaskIds(card).length));
+  const taskImage = task.images?.[0];
+  if (taskImage) {
+    card.images[index] = taskImage;
+  } else if (["pending", "queued", "processing"].includes(task.status)) {
+    if (card.images[index]?.status !== "success") {
+      card.images[index] = {
+        id: card.images[index]?.id || -(Date.now() + index),
+        image_url: "",
+        status: "pending",
+      };
+    }
+  } else if (task.status === "failed") {
+    card.images[index] = {
+      id: taskImage?.id || card.images[index]?.id || -(index + 1),
+      image_url: "",
+      status: "failed",
+      error_message: task.error_message || "",
+    };
+  }
+
+  if (!card.createdAt && task.created_at) {
+    card.createdAt = task.created_at;
+  }
+  if (task.credit_refunded) {
+    card.creditRefunded = true;
+  }
 
   if (task.status === "failed") {
-    card.errorMessage = getPreferredGenerationErrorMessage(
+    const slotError = getPreferredGenerationErrorMessage(
       task.error_message,
       task.images?.[0]?.error_message,
       Boolean(task.credit_refunded),
       "生成失败，请重试",
     );
-    return;
+    if (!card.images.some((image) => image.status === "success" || image.status === "pending")) {
+      card.errorMessage = slotError;
+    }
+    if (card.images[index]) {
+      card.images[index] = {
+        ...card.images[index],
+        error_message: slotError,
+      };
+    }
   }
+}
 
-  if (task.status === "success") {
-    card.errorMessage = "";
-    return;
+function refreshCardFromTasks(card: BatchGenerateCard, resultMap: Map<string, TaskResult>) {
+  const previousStatus = card.status;
+  const slotStatuses: TaskResult["status"][] = [];
+  getCardTaskIds(card).forEach((taskId, index) => {
+    const task = resultMap.get(taskId);
+    if (!task) return;
+    slotStatuses.push(task.status);
+    applyTaskSlotToCard(card, task, index);
+  });
+  if (
+    card.images.some((image) => image.status === "pending")
+    || slotStatuses.includes("processing")
+    || slotStatuses.includes("queued")
+    || slotStatuses.includes("pending")
+  ) {
+    if (slotStatuses.includes("processing")) {
+      card.status = "processing";
+    } else if (slotStatuses.includes("queued")) {
+      card.status = "queued";
+    } else if (["submitting", "pending", "queued", "processing"].includes(card.status)) {
+      card.status = card.status === "submitting" ? "pending" : card.status;
+    } else {
+      card.status = "pending";
+    }
+  } else {
+    refreshCardAggregateStatus(card);
   }
-
-  card.errorMessage = "";
+  return previousStatus !== card.status && ["success", "failed"].includes(card.status);
 }
 
 function stopPolling() {
@@ -1943,12 +2295,7 @@ function ensurePolling() {
 async function pollTaskResults() {
   if (taskPollingInFlight.value) return;
 
-  const activeCards = cards.value.filter((card) => (
-    !!card.taskId && (
-      ["submitting", "pending", "queued", "processing"].includes(card.status)
-      || (card.status === "success" && !hasSuccessResult(card))
-    )
-  ));
+  const activeCards = cards.value.filter((card) => hasIncompleteCardSlots(card));
 
   if (!activeCards.length) {
     stopPolling();
@@ -1958,18 +2305,20 @@ async function pollTaskResults() {
     return;
   }
 
+  const taskIds = Array.from(new Set(activeCards.flatMap((card) => getCardTaskIds(card))));
+  if (!taskIds.length) {
+    stopPolling();
+    return;
+  }
+
   taskPollingInFlight.value = true;
   try {
-    const results = await getTasks(activeCards.map((card) => String(card.taskId)));
+    const results = await getTasks(taskIds);
     const resultMap = new Map(results.map((item) => [item.id, item]));
     let shouldRefreshUser = false;
 
     activeCards.forEach((card) => {
-      const task = resultMap.get(String(card.taskId));
-      if (!task) return;
-      const previousStatus = card.status;
-      applyTaskResultToCard(card, task);
-      if (previousStatus !== card.status && ["success", "failed"].includes(card.status)) {
+      if (refreshCardFromTasks(card, resultMap)) {
         shouldRefreshUser = true;
       }
     });
@@ -1988,35 +2337,35 @@ async function pollTaskResults() {
   }
 }
 
-function hasSuccessResult(card: BatchGenerateCard) {
-  const image = card.images.find((item) => item.status === "success");
-  return Boolean(image && (image.image_url || image.preview_url));
-}
-
-function getPrimaryImage(card: BatchGenerateCard) {
-  return card.images.find((item) => item.status === "success") || null;
-}
-
 function shouldShowGeneratingCard(card: BatchGenerateCard) {
-  if (hasSuccessResult(card)) return false;
   if (card.status === "idle" || card.status === "failed") return false;
-  return Boolean(card.taskId)
-    || ["queued_local", "submitting", "pending", "queued", "processing", "success"].includes(card.status)
-    || card.images.some((item) => item.status === "pending");
-}
-
-function isCardGenerating(card: BatchGenerateCard) {
-  return shouldShowGeneratingCard(card);
+  return card.images.some((item) => item.status === "pending")
+    || ["queued_local", "submitting", "pending", "queued", "processing"].includes(card.status);
 }
 
 function getResultMessage(card: BatchGenerateCard) {
+  const successCount = getSuccessImages(card).length;
+  const failedCount = card.images.filter((image) => image.status === "failed").length;
   if (card.status === "queued_local") return "已加入本地等待队列，系统会在有空闲并发后自动提交。";
   if (card.status === "submitting") return "正在提交任务到服务端。";
   if (card.status === "pending" || card.status === "queued") return "任务已创建，正在等待服务端处理。";
   if (card.status === "processing") return "服务端正在生成图片。";
+  if (successCount > 0 && failedCount > 0) return "部分图片生成失败，可预览已完成的结果。";
   if (card.status === "success") return "生成完成，可预览或下载图片。";
   if (card.errorMessage) return card.errorMessage;
   return "";
+}
+
+function getCardResultGridColumns(card: BatchGenerateCard) {
+  return Math.max(card.images.length, 1) <= 1 ? 1 : 2;
+}
+
+function getSlotErrorMessage(card: BatchGenerateCard, image: ImageResult) {
+  return image.error_message || card.errorMessage || "生成失败";
+}
+
+function canFeedbackBatchSlot(card: BatchGenerateCard, index: number) {
+  return Boolean(getSlotTaskId(card, index) && card.images[index] && card.images[index].status !== "pending");
 }
 
 async function loadTaskScenes() {
@@ -2040,6 +2389,12 @@ onMounted(async () => {
   cards.value.forEach((card) => normalizeCardSelections(card));
   await loadActiveHistoryCards();
   ensureInitialCard();
+  if (cards.value.some((card) => hasIncompleteCardSlots(card))) {
+    ensurePolling();
+  }
+  if (cards.value.some((card) => card.status === "queued_local")) {
+    scheduleQueuePump(0);
+  }
   draftHydrationReady.value = true;
   persistBatchGenerateDraft();
 });
@@ -2149,6 +2504,16 @@ onBeforeUnmount(() => {
                   panel-title="选择自定义尺寸"
                   placeholder="选择自定义尺寸"
                   @update:model-value="globalSettings.customSize = $event"
+                />
+              </div>
+
+              <div class="field-block field-block-no-title">
+                <OptionGridPicker
+                  :model-value="String(globalSettings.numImages)"
+                  :options="BATCH_IMAGE_COUNT_OPTIONS"
+                  panel-title="选择图片数量"
+                  placeholder="选择数量"
+                  @update:model-value="globalSettings.numImages = Number($event)"
                 />
               </div>
             </div>
@@ -2352,6 +2717,19 @@ onBeforeUnmount(() => {
                   @update:model-value="card.customSize = $event"
                 />
               </div>
+
+              <div
+                class="field-block field-block-inline-fit field-block-no-title setting-quarter-cell"
+                :class="{ 'card-setting-disabled': isCardLocked(card) }"
+              >
+                <OptionGridPicker
+                  :model-value="String(card.numImages)"
+                  :options="BATCH_IMAGE_COUNT_OPTIONS"
+                  panel-title="选择图片数量"
+                  placeholder="选择数量"
+                  @update:model-value="card.numImages = Number($event)"
+                />
+              </div>
             </div>
 
             <div
@@ -2456,90 +2834,101 @@ onBeforeUnmount(() => {
                 </div>
               </div>
 
-              <div class="result-preview-shell">
-                <template v-if="hasSuccessResult(card) && getPrimaryImage(card)">
-                  <div class="result-success-frame">
-                    <img :src="getDisplayImageUrl(getPrimaryImage(card)!)" alt="生图结果" class="result-image" />
-                    <div class="result-hover-actions result-hover-actions-top">
-                      <a-button
-                        v-if="card.taskId && card.status === 'success'"
-                        shape="circle"
-                        class="result-hover-action"
-                        @click.stop="openFeedbackDialogForBatchCard(card)"
-                      >
-                        <template #icon><MessageOutlined /></template>
-                      </a-button>
-                      <a-button
-                        v-if="canDeleteBatchCardImage(card, getPrimaryImage(card)!)"
-                        shape="circle"
-                        class="result-hover-action result-hover-action-danger"
-                        @click.stop="confirmRemoveBatchCardImage(card, getPrimaryImage(card)!)"
-                      >
-                        <template #icon><DeleteOutlined /></template>
-                      </a-button>
+              <div
+                class="result-preview-shell"
+                :class="{
+                  'is-single': card.images.length <= 1,
+                  'is-multi': card.images.length > 1,
+                  'is-scrollable': card.images.length > 4,
+                }"
+                :style="{
+                  '--result-columns': String(getCardResultGridColumns(card)),
+                }"
+              >
+                <template v-if="card.images.length">
+                  <div
+                    v-for="(image, imageIndex) in card.images"
+                    :key="`${card.id}-${getSlotTaskId(card, imageIndex) || image.id || imageIndex}`"
+                    class="result-slot is-clickable"
+                    @click="openBatchTaskDetail(card, imageIndex)"
+                  >
+                    <div v-if="image.status === 'success' && (image.image_url || image.preview_url)" class="result-success-frame">
+                      <img :src="getDisplayImageUrl(image)" alt="生图结果" class="result-image" />
+                      <div class="result-hover-actions result-hover-actions-top">
+                        <a-button
+                          v-if="canFeedbackBatchSlot(card, imageIndex)"
+                          shape="circle"
+                          class="result-hover-action"
+                          @click.stop="openFeedbackDialogForBatchCard(card, imageIndex)"
+                        >
+                          <template #icon><MessageOutlined /></template>
+                        </a-button>
+                        <a-button
+                          v-if="canDeleteBatchCardTask(card)"
+                          shape="circle"
+                          class="result-hover-action result-hover-action-danger"
+                          @click.stop="confirmRemoveBatchCardTask(card)"
+                        >
+                          <template #icon><DeleteOutlined /></template>
+                        </a-button>
+                      </div>
+                      <div class="result-hover-actions">
+                        <a-button shape="circle" class="result-hover-action" @click.stop="openPreview(image)">
+                          <template #icon><EyeOutlined /></template>
+                        </a-button>
+                        <a-button
+                          v-if="canEditBatchGeneratedImage(card, image)"
+                          shape="circle"
+                          class="result-hover-action"
+                          @click.stop="handleEditBatchGeneratedImage(card, image)"
+                        >
+                          <template #icon><EditOutlined /></template>
+                        </a-button>
+                        <a-button
+                          shape="circle"
+                          class="result-hover-action"
+                          :href="getDownloadUrl(image.id, image.image_url, image.preview_url)"
+                          target="_blank"
+                          @click.stop
+                        >
+                          <template #icon><DownloadOutlined /></template>
+                        </a-button>
+                      </div>
                     </div>
-                    <div class="result-hover-actions">
-                      <a-button shape="circle" class="result-hover-action" @click.stop="openPreview(getPrimaryImage(card)!)">
-                        <template #icon><EyeOutlined /></template>
-                      </a-button>
-                      <a-button
-                        v-if="canEditBatchGeneratedImage(card, getPrimaryImage(card)!)"
-                        shape="circle"
-                        class="result-hover-action"
-                        @click.stop="handleEditBatchGeneratedImage(card, getPrimaryImage(card)!)"
-                      >
-                        <template #icon><EditOutlined /></template>
-                      </a-button>
-                      <a-button
-                        shape="circle"
-                        class="result-hover-action"
-                        :href="getDownloadUrl(getPrimaryImage(card)!.id, getPrimaryImage(card)!.image_url, getPrimaryImage(card)!.preview_url)"
-                        target="_blank"
-                        @click.stop
-                      >
-                        <template #icon><DownloadOutlined /></template>
-                      </a-button>
+                    <div v-else-if="image.status === 'failed'" class="result-failed">
+                      <img :src="failedResultAsset" alt="生成失败" class="failed-image" />
+                      <div class="result-hover-actions result-hover-actions-top">
+                        <a-button
+                          v-if="canFeedbackBatchSlot(card, imageIndex)"
+                          shape="circle"
+                          class="result-hover-action"
+                          @click.stop="openFeedbackDialogForBatchCard(card, imageIndex)"
+                        >
+                          <template #icon><MessageOutlined /></template>
+                        </a-button>
+                        <a-button
+                          v-if="canDeleteBatchCardTask(card)"
+                          shape="circle"
+                          class="result-hover-action result-hover-action-danger"
+                          @click.stop="confirmRemoveBatchCardTask(card)"
+                        >
+                          <template #icon><DeleteOutlined /></template>
+                        </a-button>
+                      </div>
+                      <div class="result-failed-overlay">
+                        <span>{{ getSlotErrorMessage(card, image) }}</span>
+                      </div>
+                    </div>
+                    <div v-else class="result-generating">
+                      <a-spin size="large" />
+                      <span class="result-generating-title">正在生成图片...</span>
+                      <span class="result-generating-sub">预计 30 秒 ～ 2 分钟</span>
                     </div>
                   </div>
                 </template>
-                <template v-else-if="shouldShowGeneratingCard(card)">
-                  <div class="result-generating">
-                    <a-spin size="large" />
-                    <span class="result-generating-title">正在生成图片...</span>
-                    <span class="result-generating-sub">预计 30 秒 ～ 2 分钟</span>
-                  </div>
-                </template>
-                <template v-else-if="card.status === 'failed'">
-                  <div class="result-failed">
-                    <img :src="failedResultAsset" alt="生成失败" class="failed-image" />
-                    <div class="result-hover-actions result-hover-actions-top">
-                      <a-button
-                        v-if="card.taskId"
-                        shape="circle"
-                        class="result-hover-action"
-                        @click.stop="openFeedbackDialogForBatchCard(card)"
-                      >
-                        <template #icon><MessageOutlined /></template>
-                      </a-button>
-                      <a-button
-                        v-if="card.images[0] && canDeleteBatchCardImage(card, card.images[0])"
-                        shape="circle"
-                        class="result-hover-action result-hover-action-danger"
-                        @click.stop="confirmRemoveBatchCardImage(card, card.images[0])"
-                      >
-                        <template #icon><DeleteOutlined /></template>
-                      </a-button>
-                    </div>
-                    <div class="result-failed-overlay">
-                      <span>{{ getResultMessage(card) || "生成失败" }}</span>
-                    </div>
-                  </div>
-                </template>
-                <template v-else>
-                  <div class="result-empty">
-                    <span>结果图将在这里展示</span>
-                  </div>
-                </template>
+                <div v-else class="result-empty is-clickable" @click="openBatchTaskDetail(card)">
+                  <span>结果图将在这里展示</span>
+                </div>
               </div>
             </div>
           </div>
@@ -2629,6 +3018,14 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </a-modal>
+    <HistoryDetailDialog
+      v-model:open="detailOpen"
+      :item="detailItem"
+      :model-options="detailModelOptions"
+      show-actions
+      @reedit="handleDetailReedit"
+      @download="handleDetailDownload"
+    />
     <FeedbackDialog
       v-model:open="feedbackDialogOpen"
       :task-id="feedbackTarget?.taskId"
@@ -3560,10 +3957,60 @@ onBeforeUnmount(() => {
 }
 
 .result-preview-shell {
-  display: flex;
-  flex-direction: column;
+  --result-gap: 8px;
+  display: grid;
+  grid-template-columns: repeat(var(--result-columns, 1), minmax(0, 1fr));
+  gap: var(--result-gap);
   width: 100%;
-  aspect-ratio: 1;
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+}
+
+.result-preview-shell.is-single {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.result-preview-shell.is-multi {
+  grid-auto-rows: calc((100% - var(--result-gap)) / 2);
+}
+
+.result-preview-shell.is-scrollable {
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.result-preview-shell.is-scrollable::-webkit-scrollbar {
+  width: 6px;
+}
+
+.result-preview-shell.is-scrollable::-webkit-scrollbar-thumb {
+  border-radius: 8px;
+  background: var(--theme-border);
+}
+
+.result-slot {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+}
+
+.result-slot.is-clickable,
+.result-empty.is-clickable {
+  cursor: pointer;
+}
+
+.result-slot > * {
+  width: 100%;
+  height: 100%;
+}
+
+.result-preview-shell.is-single .result-empty {
+  width: 100%;
+  height: 100%;
 }
 
 .result-success-frame {
@@ -3608,7 +4055,9 @@ onBeforeUnmount(() => {
 .result-success-frame:hover .result-hover-actions,
 .result-success-frame:focus-within .result-hover-actions,
 .result-failed:hover .result-hover-actions,
-.result-failed:focus-within .result-hover-actions {
+.result-failed:focus-within .result-hover-actions,
+.result-slot:hover .result-hover-actions,
+.result-slot:focus-within .result-hover-actions {
   opacity: 1;
   transform: translateY(0);
   pointer-events: auto;
@@ -3693,6 +4142,19 @@ onBeforeUnmount(() => {
 .result-generating-sub {
   color: var(--text-muted);
   font-size: 12px;
+}
+
+.result-preview-shell.is-multi .result-generating {
+  gap: 6px;
+  padding: 10px;
+}
+
+.result-preview-shell.is-multi .result-generating-title {
+  font-size: 12px;
+}
+
+.result-preview-shell.is-multi .result-generating-sub {
+  display: none;
 }
 
 .result-failed {
