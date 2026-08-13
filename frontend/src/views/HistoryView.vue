@@ -40,7 +40,15 @@ import {
   readStoredGridColumnCount,
   writeStoredGridColumnCount,
 } from "@/lib/gridColumnPreference";
-import type { AdminUser, GenerationModelOption, TaskSceneConfig, TaskSource, TaskType, UserHistoryCard } from "@/types";
+import type {
+  AdminUser,
+  GenerationModelOption,
+  TaskApiAttempt,
+  TaskSceneConfig,
+  TaskSource,
+  TaskType,
+  UserHistoryCard,
+} from "@/types";
 
 const props = withDefaults(defineProps<{
   adminUserTasks?: boolean;
@@ -222,10 +230,46 @@ function syncSelection(list: UserHistoryCard[]) {
   selectedImageIds.value = selectedImageIds.value.filter((id) => list.some((item) => item.image_id === id));
 }
 
+function getAttemptMergeKey(attempt: TaskApiAttempt) {
+  return `${attempt.id || "attempt"}:${attempt.image_id || 0}:${attempt.attempt_index}:${attempt.api_config_id || 0}`;
+}
+
+function mergeApiAttempts(nextAttempts?: TaskApiAttempt[], previousAttempts?: TaskApiAttempt[]) {
+  if (!nextAttempts?.length) return previousAttempts;
+  if (!previousAttempts?.length) return nextAttempts;
+  const previousMap = new Map(previousAttempts.map((attempt) => [getAttemptMergeKey(attempt), attempt]));
+  const mergedAttempts = nextAttempts.map((attempt) => {
+    const previousAttempt = previousMap.get(getAttemptMergeKey(attempt));
+    return {
+      ...previousAttempt,
+      ...attempt,
+      request_preview: attempt.request_preview ?? previousAttempt?.request_preview ?? null,
+    };
+  });
+  const mergedKeys = new Set(mergedAttempts.map((attempt) => getAttemptMergeKey(attempt)));
+  previousAttempts.forEach((attempt) => {
+    const key = getAttemptMergeKey(attempt);
+    if (!mergedKeys.has(key)) {
+      mergedAttempts.push(attempt);
+    }
+  });
+  return mergedAttempts;
+}
+
+function mergeDetailItem(nextItem: UserHistoryCard, previousItem: UserHistoryCard) {
+  return {
+    ...previousItem,
+    ...nextItem,
+    api_attempts: mergeApiAttempts(nextItem.api_attempts, previousItem.api_attempts),
+  };
+}
+
 function syncDetail(list: UserHistoryCard[]) {
   if (!detailItem.value) return;
   const refreshedDetail = list.find((item) => item.image_id === detailItem.value?.image_id);
-  if (refreshedDetail) detailItem.value = refreshedDetail;
+  if (refreshedDetail) {
+    detailItem.value = mergeDetailItem(refreshedDetail, detailItem.value);
+  }
 }
 
 async function fetchHistoryPage(targetPage: number) {
