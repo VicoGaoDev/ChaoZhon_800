@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from sqlalchemy import and_, func, or_
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, lazyload, selectinload
 from app.models.credit_log import CreditLog
 from app.models.external_api_config import ExternalApiConfig
 from app.models.external_api_scene_binding import ExternalApiSceneBinding
@@ -1289,34 +1289,17 @@ def get_admin_history_cards(
     cos_config = get_optional_cos_config(db)
     scene_type_map = get_task_scene_type_map(db)
     running_statuses = ["pending", "queued", "processing"]
-    image_query = (
-        db.query(Image)
-        .join(Task, Image.task_id == Task.id)
-        .join(User, User.id == Task.user_id)
-        .options(selectinload(Image.task).selectinload(Task.images), selectinload(Image.task).selectinload(Task.user))
-        .filter(User.role != "superadmin")
-        .filter(User.is_whitelisted.is_(False))
-        .filter(Task.is_deleted.is_(False))
-        .filter(Image.is_deleted.is_(False))
-    )
-    running_task_query = (
+    task_query = (
         db.query(Task)
         .join(User, User.id == Task.user_id)
-        .options(selectinload(Task.images), selectinload(Task.user))
+        .options(
+            selectinload(Task.images),
+            selectinload(Task.user),
+            lazyload(Task.api_attempts),
+        )
         .filter(User.role != "superadmin")
         .filter(User.is_whitelisted.is_(False))
         .filter(Task.is_deleted.is_(False))
-        .filter(Task.status.in_(running_statuses))
-    )
-    task_without_image_query = (
-        db.query(Task)
-        .join(User, User.id == Task.user_id)
-        .options(selectinload(Task.images), selectinload(Task.user))
-        .filter(User.role != "superadmin")
-        .filter(User.is_whitelisted.is_(False))
-        .filter(Task.is_deleted.is_(False))
-        .filter(~Task.status.in_(running_statuses))
-        .filter(~Task.images.any(Image.is_deleted.is_(False)))
     )
     prompt_reverse_query = None
     prompt_optimize_query = None
@@ -1340,70 +1323,48 @@ def get_admin_history_cards(
         )
 
     if user_id is not None:
-        image_query = image_query.filter(Task.user_id == user_id)
-        running_task_query = running_task_query.filter(Task.user_id == user_id)
-        task_without_image_query = task_without_image_query.filter(Task.user_id == user_id)
+        task_query = task_query.filter(Task.user_id == user_id)
         if prompt_reverse_query is not None:
             prompt_reverse_query = prompt_reverse_query.filter(PromptHistory.user_id == user_id)
         if prompt_optimize_query is not None:
             prompt_optimize_query = prompt_optimize_query.filter(PromptOptimizeTask.user_id == user_id)
     if mode:
         if mode == TASK_TYPE_PROMPT_REVERSE:
-            image_query = image_query.filter(Task.id.is_(None))
-            running_task_query = running_task_query.filter(Task.id.is_(None))
-            task_without_image_query = task_without_image_query.filter(Task.id.is_(None))
+            task_query = task_query.filter(Task.id.is_(None))
             prompt_optimize_query = None
         elif mode == TASK_TYPE_PROMPT_OPTIMIZE:
-            image_query = image_query.filter(Task.id.is_(None))
-            running_task_query = running_task_query.filter(Task.id.is_(None))
-            task_without_image_query = task_without_image_query.filter(Task.id.is_(None))
+            task_query = task_query.filter(Task.id.is_(None))
             prompt_reverse_query = None
         elif mode == TASK_TYPE_INPAINT:
-            image_query = image_query.filter(or_(Task.mode == "inpaint", Task.model == "inpaint"))
-            running_task_query = running_task_query.filter(or_(Task.mode == "inpaint", Task.model == "inpaint"))
-            task_without_image_query = task_without_image_query.filter(or_(Task.mode == "inpaint", Task.model == "inpaint"))
+            task_query = task_query.filter(or_(Task.mode == "inpaint", Task.model == "inpaint"))
             prompt_reverse_query = None
             prompt_optimize_query = None
         elif mode == TASK_TYPE_TEXT_GENERATE:
             text_generate_models = [key for key, value in scene_type_map.items() if value == "generate"]
-            image_query = image_query.filter(Task.mode == "generate")
-            image_query = image_query.filter(Task.model.in_(text_generate_models)) if text_generate_models else image_query.filter(Task.id.is_(None))
-            running_task_query = running_task_query.filter(Task.mode == "generate")
-            running_task_query = running_task_query.filter(Task.model.in_(text_generate_models)) if text_generate_models else running_task_query.filter(Task.id.is_(None))
-            task_without_image_query = task_without_image_query.filter(Task.mode == "generate")
-            task_without_image_query = task_without_image_query.filter(Task.model.in_(text_generate_models)) if text_generate_models else task_without_image_query.filter(Task.id.is_(None))
+            task_query = task_query.filter(Task.mode == "generate")
+            task_query = task_query.filter(Task.model.in_(text_generate_models)) if text_generate_models else task_query.filter(Task.id.is_(None))
             prompt_reverse_query = None
             prompt_optimize_query = None
         elif mode == TASK_TYPE_IMAGE_EDIT:
             image_edit_models = [key for key, value in scene_type_map.items() if value == "image_edit"]
-            image_query = image_query.filter(Task.mode == "generate")
-            image_query = image_query.filter(Task.model.in_(image_edit_models)) if image_edit_models else image_query.filter(Task.id.is_(None))
-            running_task_query = running_task_query.filter(Task.mode == "generate")
-            running_task_query = running_task_query.filter(Task.model.in_(image_edit_models)) if image_edit_models else running_task_query.filter(Task.id.is_(None))
-            task_without_image_query = task_without_image_query.filter(Task.mode == "generate")
-            task_without_image_query = task_without_image_query.filter(Task.model.in_(image_edit_models)) if image_edit_models else task_without_image_query.filter(Task.id.is_(None))
+            task_query = task_query.filter(Task.mode == "generate")
+            task_query = task_query.filter(Task.model.in_(image_edit_models)) if image_edit_models else task_query.filter(Task.id.is_(None))
             prompt_reverse_query = None
             prompt_optimize_query = None
         else:
-            image_query = image_query.filter(Task.mode == mode)
-            running_task_query = running_task_query.filter(Task.mode == mode)
-            task_without_image_query = task_without_image_query.filter(Task.mode == mode)
+            task_query = task_query.filter(Task.mode == mode)
             if mode not in PROMPT_HISTORY_MODES:
                 prompt_reverse_query = None
             if mode != TASK_TYPE_PROMPT_OPTIMIZE:
                 prompt_optimize_query = None
     if source:
-        image_query = image_query.filter(Task.source == source)
-        running_task_query = running_task_query.filter(Task.source == source)
-        task_without_image_query = task_without_image_query.filter(Task.source == source)
+        task_query = task_query.filter(Task.source == source)
         if source != "web":
             prompt_reverse_query = None
         if prompt_optimize_query is not None:
             prompt_optimize_query = prompt_optimize_query.filter(PromptOptimizeTask.source == source)
     if model:
-        image_query = image_query.filter(Task.model == model)
-        running_task_query = running_task_query.filter(Task.model == model)
-        task_without_image_query = task_without_image_query.filter(Task.model == model)
+        task_query = task_query.filter(Task.model == model)
         if model != PROMPT_REVERSE_MODEL:
             prompt_reverse_query = None
         if model != PROMPT_OPTIMIZE_MODEL:
@@ -1411,9 +1372,7 @@ def get_admin_history_cards(
     if prompt:
         keyword = prompt.strip()
         if keyword:
-            image_query = image_query.filter(Task.prompt.ilike(f"%{keyword}%"))
-            running_task_query = running_task_query.filter(Task.prompt.ilike(f"%{keyword}%"))
-            task_without_image_query = task_without_image_query.filter(Task.prompt.ilike(f"%{keyword}%"))
+            task_query = task_query.filter(Task.prompt.ilike(f"%{keyword}%"))
             if prompt_reverse_query is not None:
                 prompt_reverse_query = prompt_reverse_query.filter(PromptHistory.prompt.ilike(f"%{keyword}%"))
             if prompt_optimize_query is not None:
@@ -1422,50 +1381,40 @@ def get_admin_history_cards(
                     PromptOptimizeTask.original_prompt.ilike(f"%{keyword}%"),
                 ))
     if used_fallback_api is not None:
-        image_query = image_query.filter(Task.used_fallback_api.is_(bool(used_fallback_api)))
-        running_task_query = running_task_query.filter(Task.used_fallback_api.is_(bool(used_fallback_api)))
-        task_without_image_query = task_without_image_query.filter(Task.used_fallback_api.is_(bool(used_fallback_api)))
+        task_query = task_query.filter(Task.used_fallback_api.is_(bool(used_fallback_api)))
         prompt_reverse_query = None
         prompt_optimize_query = None
     if status:
         if status == "processing":
-            image_query = image_query.filter(Task.id.is_(None))
-            running_task_query = running_task_query.filter(Task.status == "processing")
-            task_without_image_query = task_without_image_query.filter(Task.status == "processing")
+            task_query = task_query.filter(Task.status == "processing")
             prompt_reverse_query = None
             prompt_optimize_query = None
         elif status == "pending":
-            image_query = image_query.filter(Task.id.is_(None))
-            running_task_query = running_task_query.filter(Task.status.in_(["pending", "queued"]))
-            task_without_image_query = task_without_image_query.filter(Task.status.in_(["pending", "queued"]))
+            task_query = task_query.filter(Task.status.in_(["pending", "queued"]))
             prompt_reverse_query = None
             prompt_optimize_query = None
         elif status == "failed":
-            image_query = image_query.filter(or_(Image.status == "failed", and_(Image.status == "pending", Task.status == "failed")))
-            running_task_query = running_task_query.filter(Task.id.is_(None))
-            task_without_image_query = task_without_image_query.filter(Task.status == "failed")
+            task_query = task_query.filter(or_(
+                Task.status == "failed",
+                Task.images.any(and_(Image.is_deleted.is_(False), Image.status == "failed")),
+            ))
             prompt_reverse_query = None
             prompt_optimize_query = None
         else:
-            image_query = image_query.filter(Image.status == status)
-            running_task_query = running_task_query.filter(Task.id.is_(None))
-            task_without_image_query = task_without_image_query.filter(Task.status == status)
+            task_query = task_query.filter(or_(
+                Task.status == status,
+                Task.images.any(and_(Image.is_deleted.is_(False), Image.status == status)),
+            ))
             if prompt_optimize_query is not None:
                 prompt_optimize_query = prompt_optimize_query.filter(PromptOptimizeTask.status == status)
-    else:
-        image_query = image_query.filter(~Task.status.in_(running_statuses))
     if start_date:
-        image_query = image_query.filter(Task.created_at >= start_date)
-        running_task_query = running_task_query.filter(Task.created_at >= start_date)
-        task_without_image_query = task_without_image_query.filter(Task.created_at >= start_date)
+        task_query = task_query.filter(Task.created_at >= start_date)
         if prompt_reverse_query is not None:
             prompt_reverse_query = prompt_reverse_query.filter(PromptHistory.created_at >= start_date)
         if prompt_optimize_query is not None:
             prompt_optimize_query = prompt_optimize_query.filter(PromptOptimizeTask.created_at >= start_date)
     if end_date:
-        image_query = image_query.filter(Task.created_at <= end_date)
-        running_task_query = running_task_query.filter(Task.created_at <= end_date)
-        task_without_image_query = task_without_image_query.filter(Task.created_at <= end_date)
+        task_query = task_query.filter(Task.created_at <= end_date)
         if prompt_reverse_query is not None:
             prompt_reverse_query = prompt_reverse_query.filter(PromptHistory.created_at <= end_date)
         if prompt_optimize_query is not None:
@@ -1473,24 +1422,6 @@ def get_admin_history_cards(
 
     start_index = (page - 1) * page_size
     fetch_limit = start_index + page_size + 1
-    images = (
-        image_query
-        .order_by(Task.created_at.desc(), Image.id.desc())
-        .limit(fetch_limit)
-        .all()
-    )
-    running_tasks = (
-        running_task_query
-        .order_by(Task.created_at.desc(), Task.id.desc())
-        .limit(fetch_limit)
-        .all()
-    )
-    tasks_without_images = (
-        task_without_image_query
-        .order_by(Task.created_at.desc(), Task.id.desc())
-        .limit(fetch_limit)
-        .all()
-    )
     prompt_reverse_rows = (
         prompt_reverse_query
         .order_by(PromptHistory.created_at.desc(), PromptHistory.id.desc())
@@ -1507,6 +1438,89 @@ def get_admin_history_cards(
         if prompt_optimize_query is not None
         else []
     )
+    task_candidate_limit = max(fetch_limit * 4, 80)
+    max_task_candidate_limit = max(task_candidate_limit, 10000)
+    images: list[Image] = []
+    running_tasks: list[Task] = []
+    tasks_without_images: list[Task] = []
+
+    while True:
+        images = []
+        running_tasks = []
+        tasks_without_images = []
+        candidate_task_ids = [
+            int(task_id)
+            for (task_id,) in (
+                task_query
+                .enable_eagerloads(False)
+                .with_entities(Task.id)
+                .order_by(Task.created_at.desc(), Task.id.desc())
+                .limit(task_candidate_limit)
+                .all()
+            )
+        ]
+        loaded_tasks = {
+            int(task.id): task
+            for task in (
+                db.query(Task)
+                .options(
+                    selectinload(Task.images),
+                    selectinload(Task.user),
+                    lazyload(Task.api_attempts),
+                )
+                .filter(Task.id.in_(candidate_task_ids))
+                .all()
+            )
+        } if candidate_task_ids else {}
+        candidate_tasks = [
+            loaded_tasks[task_id]
+            for task_id in candidate_task_ids
+            if task_id in loaded_tasks
+        ]
+
+        for task in candidate_tasks:
+            visible_images = sorted(
+                [image for image in task.images if not image.is_deleted],
+                key=lambda image: image.id,
+                reverse=True,
+            )
+            if status in {"processing", "pending"}:
+                if not task.is_deleted:
+                    running_tasks.append(task)
+                continue
+            if status == "failed":
+                matching_images = [
+                    image for image in visible_images
+                    if image.status == "failed" or (image.status == "pending" and task.status == "failed")
+                ]
+                if matching_images:
+                    images.extend(matching_images)
+                elif not visible_images and task.status == "failed":
+                    tasks_without_images.append(task)
+                continue
+            if status:
+                matching_images = [image for image in visible_images if image.status == status]
+                if matching_images:
+                    images.extend(matching_images)
+                elif not visible_images and task.status == status:
+                    tasks_without_images.append(task)
+                continue
+            if task.status in running_statuses:
+                if not task.is_deleted:
+                    running_tasks.append(task)
+            elif visible_images:
+                images.extend(visible_images)
+            else:
+                tasks_without_images.append(task)
+
+        task_item_count = len(images) + len(running_tasks) + len(tasks_without_images)
+        if (
+            task_item_count + len(prompt_reverse_rows) + len(prompt_optimize_rows) > fetch_limit
+            or len(candidate_task_ids) < task_candidate_limit
+            or task_candidate_limit >= max_task_candidate_limit
+        ):
+            break
+        task_candidate_limit = min(task_candidate_limit * 2, max_task_candidate_limit)
 
     user_ids = (
         {image.task.user_id for image in images if image.task}
@@ -1519,6 +1533,7 @@ def get_admin_history_cards(
         user.id: user
         for user in db.query(User).filter(User.id.in_(user_ids)).all()
     } if user_ids else {}
+
     items = []
     for image in images:
         task = image.task

@@ -62,6 +62,14 @@ export function listUsers(): Promise<AdminUser[]> {
   return client.get("/admin/users");
 }
 
+export function listUserOptions(): Promise<AdminUser[]> {
+  return client.get("/admin/user-options");
+}
+
+export function getAdminUserDetail(userId: string): Promise<AdminUser> {
+  return client.get(`/admin/users/${encodeURIComponent(userId)}`);
+}
+
 export function createUser(data: { username: string; password: string; role?: string }): Promise<AdminUser> {
   return client.post("/admin/users", data);
 }

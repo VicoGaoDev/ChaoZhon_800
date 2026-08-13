@@ -16,7 +16,7 @@ import {
   ReloadOutlined,
 } from "@ant-design/icons-vue";
 import { useRoute, useRouter } from "vue-router";
-import { getAdminHistoryCards, getAdminHistoryDetail, listUsers } from "@/api/admin";
+import { getAdminHistoryCards, getAdminHistoryDetail, getAdminUserDetail, listUserOptions } from "@/api/admin";
 import { getGenerationModels, getTaskScenes } from "@/api/config";
 import { deleteHistoryTask, fetchHistory, toggleHistoryPin } from "@/api/history";
 import {
@@ -77,6 +77,7 @@ const userFilter = ref<string | undefined>(
 const promptFilter = ref("");
 const dateRangeFilter = ref<[dayjs.Dayjs, dayjs.Dayjs] | null>(null);
 const users = ref<AdminUser[]>([]);
+const usersLoading = ref(false);
 const generationModels = ref<GenerationModelOption[]>([]);
 const taskScenes = ref<TaskSceneConfig[]>([]);
 const detailOpen = ref(false);
@@ -297,17 +298,38 @@ async function loadModels() {
 }
 
 async function loadUsers() {
-  if (!isAdminHistoryView.value) return;
+  if (!isAdminHistoryView.value || users.value.length || usersLoading.value) return;
+  usersLoading.value = true;
   try {
-    users.value = (await listUsers()).filter((item) => !item.is_whitelisted);
+    users.value = (await listUserOptions()).filter((item) => !item.is_whitelisted);
   } catch {
     users.value = [];
+  } finally {
+    usersLoading.value = false;
+  }
+}
+
+function handleUserFilterDropdownVisible(open: boolean) {
+  if (open) void loadUsers();
+}
+
+async function ensureSelectedUserOption() {
+  const selectedUserId = userFilter.value;
+  if (!isAdminHistoryView.value || !selectedUserId) return;
+  try {
+    const user = await getAdminUserDetail(selectedUserId);
+    if (user.is_whitelisted) return;
+    if (!users.value.some((item) => item.id === user.id)) {
+      users.value = [user, ...users.value];
+    }
+  } catch {
+    // keep the selected user id even if the label cannot be resolved yet
   }
 }
 
 onMounted(loadHistory);
 onMounted(loadModels);
-onMounted(loadUsers);
+onMounted(ensureSelectedUserOption);
 onBeforeUnmount(() => {
   stopHistoryPolling();
   if (filterDebounceTimer) {
@@ -983,6 +1005,8 @@ function handleEditImage(item: UserHistoryCard) {
         allow-clear
         show-search
         option-filter-prop="label"
+        :loading="usersLoading"
+        @dropdownVisibleChange="handleUserFilterDropdownVisible"
       >
         <a-select-option
           v-for="user in users"

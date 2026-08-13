@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import and_, func, or_
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, lazyload, selectinload
 from app.models.task import Task
 from app.models.image import Image
 from app.models.credit_log import CreditLog
@@ -738,7 +738,11 @@ def get_admin_history_cards(
         db.query(Image)
         .join(Task, Image.task_id == Task.id)
         .join(User, User.id == Task.user_id)
-        .options(selectinload(Image.task).selectinload(Task.images), selectinload(Image.task).selectinload(Task.user))
+        .options(selectinload(Image.task).options(
+            selectinload(Task.images),
+            selectinload(Task.user),
+            lazyload(Task.api_attempts),
+        ))
         .filter(User.role != "superadmin")
         .filter(User.is_whitelisted.is_(False))
         .filter(Task.is_deleted.is_(False))
@@ -747,7 +751,7 @@ def get_admin_history_cards(
     running_task_query = (
         db.query(Task)
         .join(User, User.id == Task.user_id)
-        .options(selectinload(Task.images), selectinload(Task.user))
+        .options(selectinload(Task.images), selectinload(Task.user), lazyload(Task.api_attempts))
         .filter(User.role != "superadmin")
         .filter(User.is_whitelisted.is_(False))
         .filter(Task.is_deleted.is_(False))
@@ -756,7 +760,7 @@ def get_admin_history_cards(
     task_without_image_query = (
         db.query(Task)
         .join(User, User.id == Task.user_id)
-        .options(selectinload(Task.images), selectinload(Task.user))
+        .options(selectinload(Task.images), selectinload(Task.user), lazyload(Task.api_attempts))
         .filter(User.role != "superadmin")
         .filter(User.is_whitelisted.is_(False))
         .filter(Task.is_deleted.is_(False))
