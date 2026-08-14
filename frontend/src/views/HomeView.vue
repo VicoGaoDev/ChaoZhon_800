@@ -1,20 +1,22 @@
 <script setup lang="ts">
-import { onMounted, ref, computed } from "vue";
+import { defineAsyncComponent, onBeforeUnmount, onMounted, ref, computed } from "vue";
 import { ArrowRightOutlined, CheckCircleFilled, FireOutlined, SafetyCertificateOutlined, ThunderboltOutlined } from "@ant-design/icons-vue";
 import { useRouter } from "vue-router";
 import { getGenerationModels } from "@/api/config";
 import { getTemplateDetail, listTemplates } from "@/api/templates";
 import { resolvePreviewImageUrl } from "@/api/images";
 import type { CreativeTemplate, GenerationModelOption } from "@/types";
-import TemplateDetailDialog from "@/components/templates/TemplateDetailDialog.vue";
 
 const router = useRouter();
+const TemplateDetailDialog = defineAsyncComponent(() => import("@/components/templates/TemplateDetailDialog.vue"));
 const showcaseItems = ref<CreativeTemplate[]>([]);
 const loadingShowcase = ref(true);
 const generationModels = ref<GenerationModelOption[]>([]);
 const detailOpen = ref(false);
 const detailLoading = ref(false);
 const detail = ref<CreativeTemplate | null>(null);
+let nonCriticalLoadTimer: number | null = null;
+let nonCriticalIdleCallbackId: number | null = null;
 
 const highlights = [
   {
@@ -41,6 +43,10 @@ const promises = [
 ];
 
 const marqueeItems = computed(() => [...showcaseItems.value, ...showcaseItems.value]);
+const idleWindow = window as Window & typeof globalThis & {
+  requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
+  cancelIdleCallback?: (handle: number) => void;
+};
 
 async function loadShowcase() {
   loadingShowcase.value = true;
@@ -60,6 +66,25 @@ async function loadModels() {
   } catch {
     generationModels.value = [];
   }
+}
+
+function scheduleNonCriticalHomeLoads() {
+  requestAnimationFrame(() => {
+    if (typeof idleWindow.requestIdleCallback === "function") {
+      nonCriticalIdleCallbackId = idleWindow.requestIdleCallback(() => {
+        nonCriticalIdleCallbackId = null;
+        void loadModels();
+        void loadShowcase();
+      }, { timeout: 1500 });
+      return;
+    }
+
+    nonCriticalLoadTimer = window.setTimeout(() => {
+      nonCriticalLoadTimer = null;
+      void loadModels();
+      void loadShowcase();
+    }, 180);
+  });
 }
 
 async function openDetail(id: number) {
@@ -93,8 +118,14 @@ function useTemplate() {
 }
 
 onMounted(() => {
-  loadModels();
-  loadShowcase();
+  scheduleNonCriticalHomeLoads();
+});
+
+onBeforeUnmount(() => {
+  if (nonCriticalLoadTimer !== null) window.clearTimeout(nonCriticalLoadTimer);
+  if (nonCriticalIdleCallbackId !== null && typeof idleWindow.cancelIdleCallback === "function") {
+    idleWindow.cancelIdleCallback(nonCriticalIdleCallbackId);
+  }
 });
 </script>
 
@@ -224,6 +255,7 @@ onMounted(() => {
     </section>
 
     <TemplateDetailDialog
+      v-if="detailOpen"
       v-model:open="detailOpen"
       :loading="detailLoading"
       :detail="detail"

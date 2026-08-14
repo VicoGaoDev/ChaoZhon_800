@@ -17,7 +17,6 @@ import { validateInviteCode } from "@/api/inviteRewards";
 import { createPaymentOrder, listPaymentPlans } from "@/api/payments";
 import { createFeedback, getMyCompletedUnreadFeedbackCount } from "@/api/feedback";
 import { getAdminUnresolvedFeedbackCount } from "@/api/admin";
-import { registerCloudbaseAccount, sendPasswordResetEmailCode, sendRegisterEmailCode } from "@/lib/cloudbase";
 import { withBaseUrl } from "@/lib/assets";
 import {
   getStoredAdminUnresolvedFeedbackCount,
@@ -595,6 +594,7 @@ async function handleSendForgotPasswordCode() {
   }
   forgotPasswordCodeLoading.value = true;
   try {
+    const { sendPasswordResetEmailCode } = await import("@/lib/cloudbase");
     forgotPasswordForm.verificationId = await sendPasswordResetEmailCode(forgotPasswordForm.email.trim());
     message.success("验证码已发送，请检查邮箱");
   } catch (err: any) {
@@ -663,6 +663,7 @@ async function handleSendRegisterCode() {
   }
   registerCodeLoading.value = true;
   try {
+    const { sendRegisterEmailCode } = await import("@/lib/cloudbase");
     await sendRegisterEmailCode(registerForm.email.trim());
     message.success("验证码已发送，请检查邮箱");
   } catch (err: any) {
@@ -713,6 +714,7 @@ async function handleRegisterSubmit() {
   }
   registerLoading.value = true;
   try {
+    const { registerCloudbaseAccount } = await import("@/lib/cloudbase");
     await registerCloudbaseAccount(
       registerForm.email.trim(),
       registerForm.verificationCode.trim(),

@@ -1,5 +1,3 @@
-import COS from "cos-js-sdk-v5";
-
 import client from "./client";
 import type {
   UploadCredential,
@@ -87,24 +85,29 @@ async function prepareUploadFile(file: File): Promise<File> {
   }
 }
 
-function uploadWithCredential(
+async function createCosClient(credential: UploadCredential) {
+  const cosModule = await import("cos-js-sdk-v5");
+  const COS = cosModule.default || cosModule;
+  return new COS({
+    getAuthorization(_, callback) {
+      callback({
+        TmpSecretId: credential.tmp_secret_id,
+        TmpSecretKey: credential.tmp_secret_key,
+        SecurityToken: credential.session_token,
+        StartTime: credential.start_time || Math.floor(Date.now() / 1000),
+        ExpiredTime: credential.expired_time,
+      });
+    },
+  });
+}
+
+async function uploadWithCredential(
   file: File,
   credential: UploadCredential,
   onProgress?: (percent: number) => void,
 ): Promise<void> {
+  const cos = await createCosClient(credential);
   return new Promise((resolve, reject) => {
-    const cos = new COS({
-      getAuthorization(_, callback) {
-        callback({
-          TmpSecretId: credential.tmp_secret_id,
-          TmpSecretKey: credential.tmp_secret_key,
-          SecurityToken: credential.session_token,
-          StartTime: credential.start_time || Math.floor(Date.now() / 1000),
-          ExpiredTime: credential.expired_time,
-        });
-      },
-    });
-
     cos.putObject(
       {
         Bucket: credential.bucket,

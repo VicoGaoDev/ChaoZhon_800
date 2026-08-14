@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, h, inject, onActivated, onBeforeUnmount, onMounted, watch, type Ref } from "vue";
+import { ref, computed, defineAsyncComponent, h, inject, onActivated, onBeforeUnmount, onMounted, watch, type Ref } from "vue";
 import { message, Modal, notification } from "ant-design-vue";
 import dayjs from "dayjs";
 import { useRouter } from "vue-router";
@@ -43,19 +43,12 @@ import {
 import { reversePrompt } from "@/api/promptReverse";
 import { optimizePrompt } from "@/api/promptOptimize";
 import { getUserAssetStats, uploadUserAssetFile } from "@/api/userAssets";
-import { uploadReferenceImage } from "@/api/upload";
 import { getMe } from "@/api/auth";
 import { getMyCompletedUnreadFeedbackCount } from "@/api/feedback";
 import { useAuthStore } from "@/stores/auth";
-import RepaintCanvas from "@/components/generate/RepaintCanvas.vue";
 import AspectRatioPicker from "@/components/generate/AspectRatioPicker.vue";
 import OptionGridPicker from "@/components/generate/OptionGridPicker.vue";
 import PromptInterceptionTip from "@/components/generate/PromptInterceptionTip.vue";
-import PromptOptimizeStyleDialog from "@/components/generate/PromptOptimizeStyleDialog.vue";
-import UserAssetPicker from "@/components/assets/UserAssetPicker.vue";
-import UserPromptLibraryModal from "@/components/prompts/UserPromptLibraryModal.vue";
-import FeedbackDialog from "@/components/feedback/FeedbackDialog.vue";
-import TemplateEditorDialog from "@/components/templates/TemplateEditorDialog.vue";
 import { withBaseUrl } from "@/lib/assets";
 import {
   getAssetQuotaFullMessage,
@@ -79,6 +72,12 @@ const auth = useAuthStore();
 const router = useRouter();
 const loginModalVisible = inject<Ref<boolean>>("loginModalVisible")!;
 const openPurchaseEntry = inject<() => void>("openPurchaseEntry");
+const RepaintCanvas = defineAsyncComponent(() => import("@/components/generate/RepaintCanvas.vue"));
+const PromptOptimizeStyleDialog = defineAsyncComponent(() => import("@/components/generate/PromptOptimizeStyleDialog.vue"));
+const UserAssetPicker = defineAsyncComponent(() => import("@/components/assets/UserAssetPicker.vue"));
+const UserPromptLibraryModal = defineAsyncComponent(() => import("@/components/prompts/UserPromptLibraryModal.vue"));
+const FeedbackDialog = defineAsyncComponent(() => import("@/components/feedback/FeedbackDialog.vue"));
+const TemplateEditorDialog = defineAsyncComponent(() => import("@/components/templates/TemplateEditorDialog.vue"));
 const COMPLETED_UNREAD_FEEDBACK_NOTIFICATION_KEY = "user-completed-unread-feedback";
 
 function isInsufficientCreditsError(err: any) {
@@ -1261,6 +1260,7 @@ async function handleSourceFileChange(e: Event) {
   sourceImageUrl.value = "";
   sourceUploading.value = true;
   try {
+    const { uploadReferenceImage } = await import("@/api/upload");
     const res = await uploadReferenceImage(file, "source");
     sourceImageUrl.value = res.url;
     repaintMaskUrl.value = "";
@@ -1311,6 +1311,7 @@ async function handleReverseFileChange(e: Event) {
 
   reverseUploading.value = true;
   try {
+    const { uploadReferenceImage } = await import("@/api/upload");
     const res = await uploadReferenceImage(file, "reverse");
     reverseImageUrl.value = res.url;
     reversePromptResult.value = "";
@@ -1670,6 +1671,7 @@ async function handleGenerate() {
     const maskFile = new File([maskBlob], `mask-${Date.now()}.png`, { type: "image/png" });
     let maskUploadUrl = "";
     try {
+      const { uploadReferenceImage } = await import("@/api/upload");
       const uploaded = await uploadReferenceImage(maskFile, "mask");
       maskUploadUrl = uploaded.url;
     } catch {
@@ -3396,6 +3398,7 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
       />
     </div>
     <FeedbackDialog
+      v-if="feedbackDialogOpen"
       v-model:open="feedbackDialogOpen"
       :task-id="feedbackTarget?.taskId"
       :model="feedbackTarget?.model"
@@ -3403,17 +3406,20 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
       :created-at="feedbackTarget?.createdAt"
     />
     <UserPromptLibraryModal
+      v-if="promptLibraryVisible"
       v-model:open="promptLibraryVisible"
       @select-prompt="useLibraryPrompt"
     />
 
     <UserAssetPicker
+      v-if="assetPickerOpen"
       v-model:open="assetPickerOpen"
       title="选择个人素材"
       @select-asset="handlePickUserAsset"
     />
     <TemplateEditorDialog ref="templateDialogRef" />
     <PromptOptimizeStyleDialog
+      v-if="promptOptimizeStyleDialogOpen"
       v-model:open="promptOptimizeStyleDialogOpen"
       @confirm="handlePromptOptimizeStyleConfirm"
       @update:open="(value) => { if (!value) closePromptOptimizeStyleDialog(); }"
