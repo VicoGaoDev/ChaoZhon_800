@@ -1410,11 +1410,15 @@ function copySecret(value: string, label: string) {
               <pre v-pre>{{ contents_parts }}</pre>
               <pre v-pre>{{ generation_config }}</pre>
               <pre v-pre>{{ reference_image_1 }}</pre>
+              <pre v-pre>{{ reference_image_1_url }}</pre>
               <pre v-pre>{{ reference_image_1_base64 }}</pre>
               <pre v-pre>{{ reference_image_1_mime_type }}</pre>
               <pre v-pre>{{ reference_image_1_data_url }}</pre>
               <pre v-pre>{{ reference_image_2 }}</pre>
+              <pre v-pre>{{ reference_image_2_url }}</pre>
               <pre v-pre>{{ reference_image_3 }}</pre>
+              <pre v-pre>{{ reference_image_3_url }}</pre>
+              <pre v-pre>{{ source_image_url }}</pre>
               <pre v-pre>{{ reference_image_count }}</pre>
               <div class="scene-desc">
                 图编辑场景会按“最大参考图张数”限制上传与请求回填数量。支持多少张，就会尝试回填多少个
@@ -1430,6 +1434,27 @@ function copySecret(value: string, label: string) {
                 <code>image</code>
                 列表。
               </div>
+              <div class="scene-desc" style="margin-top: 8px">
+                其中
+                <code v-pre>{{ reference_image_1 }}</code>
+                是内联对象，
+                <code v-pre>{{ reference_image_1_url }}</code>
+                是图片公网 URL，
+                <code v-pre>{{ reference_image_1_base64 }}</code>
+                是纯 base64，
+                <code v-pre>{{ reference_image_1_data_url }}</code>
+                是
+                <code>data:image/...;base64,...</code>
+                格式。若第三方接口要求传 URL，请使用
+                <code v-pre>{{ reference_image_1_url }}</code>
+                或
+                <code v-pre>{{ source_image_url }}</code>
+                ，不要使用
+                <code v-pre>{{ reference_image_1 }}</code>
+                /
+                <code v-pre>{{ reference_image_1_data_url }}</code>
+                。
+              </div>
               <div class="scene-desc" style="margin-top: 8px">例如：</div>
               <pre v-pre>{
   "input": {
@@ -1444,6 +1469,13 @@ function copySecret(value: string, label: string) {
       "b64_json": "{{ reference_image_1_base64 }}"
     }
   ]
+}</pre>
+              <pre v-pre>{
+  "images": [
+    "{{ reference_image_1_url }}?imageMogr2/format/webp",
+    "{{ reference_image_2_url }}?imageMogr2/format/webp"
+  ],
+  "source": "{{ source_image_url }}"
 }</pre>
               <div class="scene-desc">
                 宽高比、生图质量、自定义分辨率选项请在场景表单中用 JSON 数组维护，系统会把对应 value 传入

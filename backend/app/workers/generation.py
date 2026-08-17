@@ -38,6 +38,7 @@ from app.services.external_api_config_service import (
     SCENE_INPAINT,
     should_use_multipart_request,
 )
+from app.services.image_delivery_service import get_optional_cos_config, serialize_asset_urls
 from app.services.task_service import refund_task_credit_for_generation_failure_if_needed
 from app.utils.datetime_utils import now_local
 
@@ -432,6 +433,7 @@ def _call_generation_api_once(
         config_name = config.name
         configured_field_path = (config.result_base64_field or "").strip()
         mapped_resolution = resolve_mapped_resolution(db, scene_key, aspect_ratio, image_size)
+        cos_config = get_optional_cos_config(db)
 
         parts: list[dict] = []
         render_variables = {
@@ -456,6 +458,7 @@ def _call_generation_api_once(
                 return None, "图编辑原图格式无效", None, None
             parts.append(source_inline_part)
             render_variables["source_image"] = source_inline_part
+            render_variables["source_image_url"] = serialize_asset_urls(source_image, cos_config=cos_config)["image_url"]
             render_variables["source_image_base64"] = source_payload["base64"]
             render_variables["source_image_mime_type"] = source_payload["mime_type"]
             render_variables["source_image_data_url"] = source_payload["data_url"]
@@ -494,6 +497,7 @@ def _call_generation_api_once(
                 parts.append(inline_part)
                 reference_count += 1
                 render_variables[f"reference_image_{index}"] = inline_part
+                render_variables[f"reference_image_{index}_url"] = serialize_asset_urls(ref_url, cos_config=cos_config)["image_url"]
                 render_variables[f"reference_image_{index}_base64"] = reference_payload["base64"]
                 render_variables[f"reference_image_{index}_mime_type"] = reference_payload["mime_type"]
                 render_variables[f"reference_image_{index}_data_url"] = reference_payload["data_url"]
