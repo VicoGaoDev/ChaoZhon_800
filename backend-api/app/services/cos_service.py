@@ -1,6 +1,7 @@
 import base64
 import mimetypes
 import re
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -281,12 +282,17 @@ def load_image_bytes(image_url: str) -> tuple[bytes, str] | None:
 
     parsed = urlparse(image_url)
     if parsed.scheme in {"http", "https"}:
-        try:
-            with httpx.Client(timeout=settings.IMAGE_FETCH_TIMEOUT, follow_redirects=True) as client:
-                response = client.get(image_url)
-            response.raise_for_status()
-        except Exception:
-            return None
+        response: httpx.Response | None = None
+        for attempt in range(4):
+            try:
+                with httpx.Client(timeout=settings.IMAGE_FETCH_TIMEOUT, follow_redirects=True) as client:
+                    response = client.get(image_url)
+                response.raise_for_status()
+                break
+            except Exception:
+                if attempt == 3:
+                    return None
+                time.sleep(5)
         mime_type = response.headers.get("content-type", "").split(";")[0].strip() or infer_mime_type(parsed.path)
         return response.content, mime_type
 
