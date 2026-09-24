@@ -2,7 +2,7 @@
 import { ref, computed, defineAsyncComponent, h, inject, nextTick, onActivated, onBeforeUnmount, onMounted, watch, type Ref } from "vue";
 import { message, Modal, notification } from "ant-design-vue";
 import dayjs from "dayjs";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import {
   FontSizeOutlined,
   CloseOutlined,
@@ -23,6 +23,8 @@ import {
   RedoOutlined,
   ReloadOutlined,
   ThunderboltOutlined,
+  DoubleLeftOutlined,
+  DoubleRightOutlined,
   DownOutlined,
   UndoOutlined,
   MessageOutlined,
@@ -76,6 +78,8 @@ import type { GenerationModelOption, ImageResult, PublicPromptOptimizeStyle, Sce
 
 const auth = useAuthStore();
 const router = useRouter();
+const route = useRoute();
+const GENERATE_MENU_ENTRY_EVENT = "ai800:generate-menu-entry";
 const loginModalVisible = inject<Ref<boolean>>("loginModalVisible")!;
 const openPurchaseEntry = inject<() => void>("openPurchaseEntry");
 const RepaintCanvas = defineAsyncComponent(() => import("@/components/generate/RepaintCanvas.vue"));
@@ -289,6 +293,18 @@ const preferredResultColumnCount = ref<ResultColumnOption>(
     DEFAULT_RESULT_COLUMN_COUNT,
   ),
 );
+const RESULT_CARD_ASPECT_OPTIONS = [
+  { label: "1:1", value: "1:1" },
+  { label: "3:4", value: "3:4" },
+  { label: "4:3", value: "4:3" },
+  { label: "9:16", value: "9:16" },
+  { label: "16:9", value: "16:9" },
+] as const;
+type ResultCardAspectRatio = typeof RESULT_CARD_ASPECT_OPTIONS[number]["value"];
+const resultCardAspectRatio = ref<ResultCardAspectRatio>("1:1");
+const resultViewOptionsOpen = ref(false);
+const isConfigPanelCollapsed = ref(false);
+const isDesktopGenerateLayout = computed(() => viewportWidth.value > 960);
 
 const promptLibraryVisible = ref(false);
 const sceneConfigLoading = ref(true);
@@ -986,32 +1002,16 @@ const resultColumnCount = computed(() => {
 });
 
 const resultListStyle = computed(() => ({
-  gridTemplateColumns: `repeat(${resultColumnCount.value}, minmax(0, 1fr))`,
+  "--generate-grid-columns": String(resultColumnCount.value),
+  "--generate-result-card-aspect": resultCardAspectRatio.value.replace(":", " / "),
 }));
 
 watch(preferredResultColumnCount, (count) => {
   writeStoredGridColumnCount(GENERATE_RESULT_COLUMN_COUNT_KEY, count);
 });
 
-const resultColumns = computed(() => {
-  const columns = Array.from({ length: resultColumnCount.value }, () => [] as typeof resultItems.value);
-  const columnHeights = Array.from({ length: resultColumnCount.value }, () => 0);
-  const fixedRowItems = resultColumnCount.value * 2;
-
-  resultItems.value.forEach((item, itemIndex) => {
-    let columnIndex = 0;
-    if (itemIndex < fixedRowItems) {
-      columnIndex = itemIndex % resultColumnCount.value;
-    } else {
-      columnIndex = columnHeights.reduce((bestIndex, height, index, list) => (
-        height < list[bestIndex] ? index : bestIndex
-      ), 0);
-    }
-
-    columns[columnIndex].push(item);
-    columnHeights[columnIndex] += 1 / getTaskAspectRatioValue(item.task);
-  });
-  return columns;
+watch(isDesktopGenerateLayout, (desktop) => {
+  if (!desktop) isConfigPanelCollapsed.value = false;
 });
 
 function syncViewportWidth() {
@@ -1048,6 +1048,21 @@ function handleExtendedToolMenuClick({ key }: { key: string }) {
   if (key === "promptReverse" || key === "inpaint") {
     generateMode.value = key;
   }
+}
+
+function applyRouteGenerateMode() {
+  const mode = Array.isArray(route.query.mode) ? route.query.mode[0] : route.query.mode;
+  if (mode === "textGenerate" || mode === "imageEdit" || mode === "inpaint" || mode === "promptReverse") {
+    generateMode.value = mode;
+  }
+}
+
+function handleGenerateMenuEntry(event: Event) {
+  const mode = (event as CustomEvent<{ mode?: GenerateMode }>).detail?.mode;
+  if (mode === "textGenerate" || mode === "imageEdit" || mode === "inpaint" || mode === "promptReverse") {
+    generateMode.value = mode;
+  }
+  isConfigPanelCollapsed.value = false;
 }
 
 function syncTaskFromResult(taskId: string, data: TaskResult) {
@@ -2562,6 +2577,7 @@ onMounted(async () => {
   syncViewportWidth();
   window.addEventListener("resize", syncViewportWidth);
   window.addEventListener("paste", handleReferencePaste);
+  window.addEventListener(GENERATE_MENU_ENTRY_EVENT, handleGenerateMenuEntry);
   await Promise.all([
     loadTaskSceneConfigs(),
     loadRecentGeneratedTasks(),
@@ -2577,6 +2593,7 @@ onMounted(async () => {
     "已套用创意模版参数，可继续编辑后生成",
     TEMPLATE_DRAFT_KEY
   );
+  applyRouteGenerateMode();
 });
 
 onActivated(() => {
@@ -2588,11 +2605,17 @@ onBeforeUnmount(() => {
   stopAllTaskPolling();
   window.removeEventListener("resize", syncViewportWidth);
   window.removeEventListener("paste", handleReferencePaste);
+  window.removeEventListener(GENERATE_MENU_ENTRY_EVENT, handleGenerateMenuEntry);
   unbindReferenceDragHandlers?.();
   unbindReferenceDragHandlers = null;
   referenceItems.value.forEach((item) => revokeObjectUrl(item.objectUrl));
   revokeObjectUrl(sourcePreviewUrl.value);
 });
+
+watch(
+  () => route.query.mode,
+  () => applyRouteGenerateMode(),
+);
 
 watch(generationModels, (models) => {
   if (!models.length) {
@@ -2636,8 +2659,9 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
 
 <template>
   <div class="generate-page">
-    <div class="generate-workbench">
-      <div class="left-col">
+    <div class="generate-workbench" :class="{ 'config-collapsed': isConfigPanelCollapsed }">
+      <transition name="config-panel-slide">
+      <div v-if="!isConfigPanelCollapsed" class="left-col">
         <div class="generate-mode-shell">
           <div class="generate-mode-switch">
             <div class="mode-switch-cluster">
@@ -2706,6 +2730,16 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
                     </a-menu>
                   </template>
                 </a-dropdown>
+                <a-tooltip v-if="isDesktopGenerateLayout" title="收起配置">
+                  <button
+                    type="button"
+                    class="mode-switch-btn config-collapse-btn"
+                    aria-label="收起配置"
+                    @click="isConfigPanelCollapsed = true"
+                  >
+                    <DoubleLeftOutlined />
+                  </button>
+                </a-tooltip>
               </div>
             </div>
           </div>
@@ -3757,10 +3791,25 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
           </transition>
         </div>
       </div>
+      </transition>
 
-      <section class="work-panel result-panel">
+      <section
+        class="work-panel result-panel"
+        :class="{ 'config-panel-is-collapsed': isConfigPanelCollapsed }"
+      >
         <div class="result-head">
           <div class="result-head-main">
+            <a-tooltip v-if="isDesktopGenerateLayout && isConfigPanelCollapsed" title="展开配置">
+              <button
+                type="button"
+                class="result-config-expand-btn"
+                aria-label="展开配置"
+                @click="isConfigPanelCollapsed = false"
+              >
+                <DoubleRightOutlined />
+                <span>展开配置</span>
+              </button>
+            </a-tooltip>
             <div class="result-tips">
               <div class="result-tip-line">
                 每日前 10 次失败任务不扣积分，所有任务可在
@@ -3770,15 +3819,54 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
             </div>
           </div>
           <div class="result-head-meta">
-            <a-select
-              v-model:value="preferredResultColumnCount"
-              placeholder="每行列数"
-              class="history-filter-control history-filter-columns"
+            <a-popover
+              v-model:open="resultViewOptionsOpen"
+              trigger="click"
+              placement="bottomRight"
+              overlay-class-name="generate-view-popover"
             >
-              <a-select-option :value="2">2 列</a-select-option>
-              <a-select-option :value="3">3 列</a-select-option>
-              <a-select-option :value="4">4 列</a-select-option>
-            </a-select>
+              <a-tooltip title="视图设置">
+                <button
+                  type="button"
+                  class="result-filter-trigger result-view-trigger"
+                  aria-label="打开视图设置"
+                >
+                  <AppstoreOutlined />
+                </button>
+              </a-tooltip>
+              <template #content>
+                <div class="generate-view-panel">
+                  <div class="generate-view-section">
+                    <div class="generate-view-panel-title">卡片形状</div>
+                    <div class="generate-card-aspect-options">
+                      <button
+                        v-for="option in RESULT_CARD_ASPECT_OPTIONS"
+                        :key="option.value"
+                        type="button"
+                        class="generate-card-aspect-option"
+                        :class="{ active: resultCardAspectRatio === option.value }"
+                        @click="resultCardAspectRatio = option.value"
+                      >
+                        <span class="generate-card-aspect-icon" :class="`aspect-${option.value.replace(':', '-')}`"></span>
+                        <span>{{ option.label }}</span>
+                      </button>
+                    </div>
+                  </div>
+                  <div class="generate-view-section">
+                    <div class="generate-view-panel-title">每行列数</div>
+                    <a-radio-group v-model:value="preferredResultColumnCount" class="generate-view-column-group">
+                      <a-radio-button
+                        v-for="columnCount in RESULT_COLUMN_OPTIONS"
+                        :key="columnCount"
+                        :value="columnCount"
+                      >
+                        {{ columnCount }} 列
+                      </a-radio-button>
+                    </a-radio-group>
+                  </div>
+                </div>
+              </template>
+            </a-popover>
             <div class="result-retain-badge">
               <ExclamationCircleFilled class="result-retain-icon" />
               <span>服务器只保留原图15天</span>
@@ -3789,20 +3877,13 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
         <div class="result-body">
           <template v-if="resultItems.length">
             <div class="result-list" :style="resultListStyle">
-              <TransitionGroup
-                v-for="(column, columnIndex) in resultColumns"
-                :key="`result-column-${columnIndex}`"
-                name="generate-result"
-                tag="div"
-                class="result-column"
-              >
+              <TransitionGroup name="generate-result" tag="div" class="result-grid">
                 <div
-                  v-for="(item, index) in column"
+                  v-for="(item, index) in resultItems"
                   :key="`${item.taskLocalId}-${item.image.id}-${item.index}`"
                   class="result-card"
                   :style="{
-                    '--generate-result-delay': `${Math.min(columnIndex + index, 9) * 45}ms`,
-                    '--result-aspect-ratio': getTaskAspectRatio(item.task),
+                    '--generate-result-delay': `${Math.min(index, 9) * 45}ms`,
                     '--result-pending-bg-image': `url('${generateEmptyStateAsset}')`,
                   }"
                   :class="{ pending: item.image.status === 'pending' }"
@@ -4030,6 +4111,9 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
   --config-title-gap: 8px;
   --config-title-color: #5e4524;
   --config-section-gap: 17px;
+  --generate-config-min-width: 320px;
+  --generate-config-fluid-width: 31vw;
+  --generate-config-max-width: 470px;
   animation: generate-page-enter var(--motion-duration-reveal-soft) ease both;
 }
 
@@ -4099,20 +4183,94 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
 }
 
 .generate-workbench {
+  position: relative;
   display: grid;
-  grid-template-columns: 35fr 65fr;
+  grid-template-columns:
+    clamp(
+      var(--generate-config-min-width),
+      var(--generate-config-fluid-width),
+      var(--generate-config-max-width)
+    )
+    minmax(0, 1fr);
   gap: 20px;
   align-items: stretch;
+  width: 100%;
+  min-width: 0;
   min-height: 100%;
   height: 100%;
   animation: generate-fade-up var(--motion-duration-reveal) var(--motion-ease-enter) 0.04s both;
+  transition:
+    grid-template-columns var(--motion-duration-slide) var(--motion-ease-soft),
+    gap var(--motion-duration-slide) var(--motion-ease-soft);
+}
+
+.generate-workbench.config-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+}
+
+@media (min-width: 1200px) and (hover: hover) and (pointer: fine) {
+  .generate-workbench {
+    --generate-config-min-width: 340px;
+    --generate-config-fluid-width: 28vw;
+    --generate-config-max-width: 520px;
+  }
 }
 
 .left-col {
   display: flex;
   flex-direction: column;
+  width: 100%;
   min-height: 0;
-  animation: generate-slide-left-in var(--motion-duration-stage) var(--motion-ease-enter) 0.08s both;
+  min-width: var(--generate-config-min-width);
+  max-width: var(--generate-config-max-width);
+}
+
+.config-panel-slide-enter-active,
+.config-panel-slide-leave-active {
+  overflow: hidden;
+  transition:
+    opacity var(--motion-duration-slide) var(--motion-ease-soft),
+    transform var(--motion-duration-slide) var(--motion-ease-enter),
+    filter var(--motion-duration-slide) var(--motion-ease-soft);
+}
+
+.config-panel-slide-leave-active {
+  position: absolute;
+  inset: 0 auto 0 0;
+  z-index: 3;
+  width: clamp(
+    var(--generate-config-min-width),
+    var(--generate-config-fluid-width),
+    var(--generate-config-max-width)
+  );
+  pointer-events: none;
+}
+
+.config-panel-slide-enter-from,
+.config-panel-slide-leave-to {
+  opacity: 0;
+  transform: translate3d(-28px, 0, 0) scaleX(0.96);
+  filter: blur(6px);
+}
+
+.config-panel-slide-enter-to,
+.config-panel-slide-leave-from {
+  opacity: 1;
+  transform: translate3d(0, 0, 0) scaleX(1);
+  filter: blur(0);
+}
+
+.config-collapse-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-color: var(--theme-control-border-strong);
+  background: rgba(var(--theme-surface-strong-rgb), 0.74);
+  color: var(--theme-accent-text);
+  font-size: 16px;
 }
 
 .generate-mode-shell {
@@ -5796,14 +5954,184 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  padding: 16px 18px 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
   animation: generate-slide-right-in var(--motion-duration-stage-delayed) var(--motion-ease-enter) 0.14s both;
 }
 
-.result-head {
-  display: flex;
+.result-config-expand-btn {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--theme-control-border-strong);
+  border-radius: 999px;
+  background: rgba(var(--theme-surface-strong-rgb), 0.92);
+  color: var(--theme-accent-text);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.result-filter-trigger {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--theme-accent-text);
+  font-size: 22px;
+  cursor: pointer;
+  transition:
+    transform var(--motion-duration-hover) var(--motion-ease-enter),
+    color var(--motion-duration-hover) var(--motion-ease-soft),
+    background var(--motion-duration-fast) var(--motion-ease-soft),
+    box-shadow var(--motion-duration-fast) var(--motion-ease-soft);
+
+  &:hover,
+  &:focus-visible,
+  &.active {
+    color: var(--theme-accent-text-hover);
+    background: rgba(var(--theme-surface-strong-rgb), 0.86);
+    transform: translateY(-1px);
+    box-shadow: 0 10px 20px var(--theme-shadow-soft);
+  }
+}
+
+.result-view-trigger {
+  font-size: 21px;
+}
+
+.generate-view-panel {
+  width: 260px;
+  color: var(--theme-title);
+}
+
+.generate-view-section + .generate-view-section {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--theme-panel-border);
+}
+
+.generate-view-panel-title {
+  color: var(--theme-title);
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.generate-card-aspect-options {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.generate-card-aspect-option {
+  min-height: 56px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 7px 4px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    transform var(--motion-duration-press) var(--motion-ease-soft),
+    color var(--motion-duration-fast) var(--motion-ease-soft),
+    background var(--motion-duration-fast) var(--motion-ease-soft),
+    border-color var(--motion-duration-fast) var(--motion-ease-soft);
+
+  &:hover,
+  &:focus-visible,
+  &.active {
+    color: var(--theme-title);
+    border-color: var(--theme-border-strong);
+    background: var(--theme-control-hover-bg);
+  }
+
+  &.active {
+    color: var(--theme-accent-contrast);
+    border-color: transparent;
+    background: var(--theme-accent);
+  }
+}
+
+.generate-card-aspect-icon {
+  display: block;
+  border: 2px solid currentColor;
+  border-radius: 3px;
+  opacity: 0.9;
+}
+
+.generate-card-aspect-icon.aspect-1-1 { width: 16px; height: 16px; }
+.generate-card-aspect-icon.aspect-3-4 { width: 15px; height: 20px; }
+.generate-card-aspect-icon.aspect-4-3 { width: 20px; height: 15px; }
+.generate-card-aspect-icon.aspect-9-16 { width: 13px; height: 22px; }
+.generate-card-aspect-icon.aspect-16-9 { width: 22px; height: 13px; }
+
+.generate-view-column-group {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+
+  :deep(.ant-radio-button-wrapper) {
+    height: 34px;
+    padding: 0 8px;
+    border: 1px solid var(--theme-control-border) !important;
+    border-radius: 10px !important;
+    background: var(--theme-control-bg);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 32px;
+    text-align: center;
+    box-shadow: none !important;
+  }
+
+  :deep(.ant-radio-button-wrapper::before) {
+    display: none !important;
+  }
+
+  :deep(.ant-radio-button-wrapper-checked) {
+    color: var(--theme-accent-contrast);
+    border-color: transparent !important;
+    background: var(--theme-accent);
+  }
+}
+
+:global(.generate-view-popover .ant-popover-inner) {
+  border-radius: 18px;
+  background: var(--theme-modal-bg);
+  border: 1px solid var(--theme-panel-border);
+  box-shadow: 0 18px 38px var(--theme-shadow-medium);
+}
+
+:global(.generate-view-popover .ant-popover-inner-content) {
+  padding: 14px;
+}
+
+.result-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
   gap: 12px;
 }
 
@@ -5906,15 +6234,14 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
 }
 
 .result-list {
-  display: grid;
-  align-items: start;
-  gap: 12px;
-  margin-top: 12px;
+  margin-top: 0;
+  background: transparent;
 }
 
-.result-column {
-  display: flex;
-  flex-direction: column;
+.result-grid {
+  display: grid;
+  align-items: start;
+  grid-template-columns: repeat(var(--generate-grid-columns, 3), minmax(0, 1fr));
   gap: 16px;
 }
 
@@ -5977,7 +6304,7 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
 
 .result-frame {
   position: relative;
-  aspect-ratio: var(--result-aspect-ratio, 1 / 1);
+  aspect-ratio: var(--generate-result-card-aspect, 1 / 1);
   min-height: 0;
   border-radius: 16px;
   overflow: hidden;
@@ -6535,9 +6862,12 @@ html:is([data-theme="dark"], [data-theme="midnight"]) .generate-page .result-mor
   .history-item-enter-active,
   .history-item-leave-active,
   .history-item-move,
+  .config-panel-slide-enter-active,
+  .config-panel-slide-leave-active,
   .generate-panel-slide-enter-active,
   .generate-panel-slide-leave-active,
-  .mode-switch-btn {
+  .mode-switch-btn,
+  .result-config-expand-btn {
     transition: none !important;
   }
 }
@@ -6577,9 +6907,16 @@ html:is([data-theme="dark"], [data-theme="midnight"]) .generate-page .result-mor
     height: auto;
   }
 
-  .generate-workbench {
+  .generate-workbench,
+  .generate-workbench.config-collapsed {
     grid-template-columns: 1fr;
     height: auto;
+    gap: 20px;
+  }
+
+  .left-col {
+    min-width: 0;
+    max-width: none;
   }
 
   .result-panel {

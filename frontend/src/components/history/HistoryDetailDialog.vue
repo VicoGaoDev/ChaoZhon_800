@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { message } from "ant-design-vue";
-import { CopyOutlined, DownloadOutlined, PictureOutlined, ReloadOutlined } from "@ant-design/icons-vue";
+import { CloseOutlined, CopyOutlined, DownloadOutlined, LeftOutlined, PictureOutlined, ReloadOutlined, RightOutlined } from "@ant-design/icons-vue";
 import dayjs from "dayjs";
 import {
   exceedsRealtimeImagePreviewLimit,
@@ -19,6 +19,9 @@ import {
 } from "@/lib/generationErrors";
 import type { ImageResult, TaskApiAttempt, UserHistoryCard } from "@/types";
 
+const SIDE_NAV_WIDTH = 76;
+const SIDE_NAV_BREAKPOINT = 960;
+
 const props = withDefaults(defineProps<{
   open: boolean;
   item: UserHistoryCard | null;
@@ -28,6 +31,8 @@ const props = withDefaults(defineProps<{
   showAttemptResponsePreview?: boolean;
   hideCreditCost?: boolean;
   requestPreviewLoading?: boolean;
+  hasPrev?: boolean;
+  hasNext?: boolean;
   modelOptions?: Array<{ label: string; value: string }>;
   title?: string;
 }>(), {
@@ -37,6 +42,8 @@ const props = withDefaults(defineProps<{
   showAttemptResponsePreview: false,
   hideCreditCost: false,
   requestPreviewLoading: false,
+  hasPrev: false,
+  hasNext: false,
   modelOptions: () => [],
   title: "任务详情",
 });
@@ -45,7 +52,19 @@ const emit = defineEmits<{
   "update:open": [value: boolean];
   reedit: [item: UserHistoryCard];
   download: [item: UserHistoryCard];
+  "navigate-prev": [];
+  "navigate-next": [];
 }>();
+
+const viewportWidth = ref(typeof window === "undefined" ? 1280 : window.innerWidth);
+const reserveSideNav = computed(() => {
+  if (typeof document === "undefined") return false;
+  if (viewportWidth.value <= SIDE_NAV_BREAKPOINT) return false;
+  return !!document.querySelector(".app-layout-desktop-side-nav .canvas-side-nav");
+});
+const panelStyle = computed(() => (
+  reserveSideNav.value ? { left: `${SIDE_NAV_WIDTH}px` } : { left: "0px" }
+));
 
 const previewVisible = ref(false);
 const previewSrc = ref("");
@@ -175,27 +194,99 @@ function getDetailCreditCost(item: UserHistoryCard) {
   return Number(item.credit_cost || 0);
 }
 
-function detailMetaList(item: UserHistoryCard) {
-  return [
-    `状态：${statusLabel(item.status)}`,
-    item.task_is_deleted ? "任务状态：已软删除" : "",
-    item.is_soft_deleted ? `图片软删除：${item.images.filter((img) => img.is_deleted).length} 张` : "",
-    `来源：${sourceLabel(item.source)}`,
-    `类型：${modeLabel(item.task_type)}`,
-    `模型：${getModelLabel(item.model)}`,
-    item.item_type === "task" && !props.hideCreditCost ? `消耗积分：${getDetailCreditCost(item)}` : "",
-    item.style_name ? `风格：${item.style_name}` : "",
-    item.custom_size ? "" : `比例：${item.size || "-"}`,
-    item.custom_size ? "" : (item.resolution ? `分辨率：${item.resolution}` : ""),
-    item.custom_size ? `自定义分辨率：${item.custom_size}` : "",
-    item.image_format ? `格式：${item.image_format}` : "",
-    item.image_size_bytes ? `大小：${formatImageSize(item.image_size_bytes)}` : "",
-    item.item_type === "task" && item.api_attempts?.length
-      ? `备用接口：${item.used_fallback_api ? "已调用" : "未调用"}`
-      : "",
-    `时间：${formatTime(item.created_at)}`,
+type DetailMetaChip = {
+  text: string;
+  kind: "status" | "info";
+  status?: UserHistoryCard["status"];
+};
+type DetailMetaItem = {
+  key: string;
+  label: string;
+  value?: string;
+  chips?: DetailMetaChip[];
+};
+
+function detailMetaList(item: UserHistoryCard): DetailMetaItem[] {
+  const sizeChips: DetailMetaChip[] = [];
+  if (item.custom_size) {
+    sizeChips.push({ text: item.custom_size, kind: "info" });
+  } else {
+    if (item.size) sizeChips.push({ text: item.size, kind: "info" });
+    if (item.resolution) sizeChips.push({ text: item.resolution, kind: "info" });
+  }
+  const fileParts = [
+    item.image_format || "",
+    item.image_size_bytes ? formatImageSize(item.image_size_bytes) : "",
   ].filter(Boolean);
+  const metas: Array<DetailMetaItem | null> = [
+    { key: "status", label: "状态", chips: [{ text: statusLabel(item.status), kind: "status", status: item.status }] },
+    { key: "model", label: "模型", chips: [{ text: getModelLabel(item.model), kind: "info" }] },
+    sizeChips.length
+      ? { key: "size", label: item.custom_size ? "自定义分辨率" : "宽高比 / 分辨率", chips: sizeChips }
+      : null,
+    item.task_is_deleted ? { key: "task-deleted", label: "任务状态", value: "已软删除" } : null,
+    item.is_soft_deleted
+      ? { key: "image-deleted", label: "图片软删除", value: `${item.images.filter((img) => img.is_deleted).length} 张` }
+      : null,
+    { key: "source-type", label: "来源 / 类型", value: [sourceLabel(item.source), modeLabel(item.task_type)].filter(Boolean).join(" / ") },
+    item.style_name ? { key: "style", label: "风格", value: item.style_name } : null,
+    fileParts.length ? { key: "file", label: "格式 / 大小", value: fileParts.join(" / ") } : null,
+    item.item_type === "task" && item.api_attempts?.length
+      ? { key: "fallback", label: "备用接口", value: item.used_fallback_api ? "已调用" : "未调用" }
+      : null,
+    item.created_at ? { key: "created", label: "创建时间", value: formatTime(item.created_at) } : null,
+    item.item_type === "task" && !props.hideCreditCost
+      ? { key: "credit", label: "消耗积分", value: String(getDetailCreditCost(item)) }
+      : null,
+  ];
+  return metas.filter((meta): meta is DetailMetaItem => meta != null);
 }
+
+function updateViewportWidth() {
+  if (typeof window === "undefined") return;
+  viewportWidth.value = window.innerWidth;
+}
+
+function closeDialog() {
+  emit("update:open", false);
+}
+
+function navigatePrev() {
+  if (!props.hasPrev) return;
+  emit("navigate-prev");
+}
+
+function navigateNext() {
+  if (!props.hasNext) return;
+  emit("navigate-next");
+}
+
+function handleDetailKeydown(event: KeyboardEvent) {
+  if (!props.open) return;
+  if (event.key === "Escape") {
+    closeDialog();
+    return;
+  }
+  if (event.key === "ArrowLeft") {
+    event.preventDefault();
+    navigatePrev();
+    return;
+  }
+  if (event.key === "ArrowRight") {
+    event.preventDefault();
+    navigateNext();
+  }
+}
+
+onMounted(() => {
+  window.addEventListener("resize", updateViewportWidth);
+  window.addEventListener("keydown", handleDetailKeydown);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("resize", updateViewportWidth);
+  window.removeEventListener("keydown", handleDetailKeydown);
+});
 
 function attemptStatusLabel(status: string) {
   return status === "success" ? "成功" : "失败";
@@ -319,21 +410,45 @@ function handleDownload(item: UserHistoryCard) {
 </script>
 
 <template>
-  <a-modal
-    :open="open"
-    :title="title"
-    :footer="null"
-    :width="1040"
-    wrap-class-name="history-detail-modal"
-    centered
-    @update:open="emit('update:open', $event)"
-  >
+  <Teleport to="body">
+    <div
+      v-if="open"
+      class="history-task-detail-overlay"
+      :class="{ 'is-side-nav-offset': reserveSideNav }"
+      :style="panelStyle"
+    >
+      <div class="history-task-detail-panel">
+        <div class="history-task-detail-header">
+          <div class="history-task-detail-title">{{ title }}</div>
+          <button type="button" class="history-task-detail-close" aria-label="关闭" @click="closeDialog">
+            <CloseOutlined />
+          </button>
+        </div>
+        <div class="history-task-detail-body">
     <div v-if="loading" class="detail-loading">
       <span>正在加载任务详情...</span>
     </div>
     <template v-else-if="item">
       <div :key="item.display_id || item.task_id || item.history_id || item.image_id || item.created_at" class="detail-layout">
         <div class="detail-left">
+          <button
+            v-if="hasPrev"
+            type="button"
+            class="detail-nav-btn detail-nav-prev"
+            aria-label="上一个任务"
+            @click="navigatePrev"
+          >
+            <LeftOutlined />
+          </button>
+          <button
+            v-if="hasNext"
+            type="button"
+            class="detail-nav-btn detail-nav-next"
+            aria-label="下一个任务"
+            @click="navigateNext"
+          >
+            <RightOutlined />
+          </button>
           <div class="detail-section">
             <div v-if="item.mode === 'promptReverse'" class="detail-label">反推原图</div>
             <div v-if="item.mode === 'promptReverse' && item.source_image" class="detail-thumb-row">
@@ -401,7 +516,22 @@ function handleDownload(item: UserHistoryCard) {
 
           <div class="detail-section">
             <div class="detail-meta">
-              <span v-for="meta in detailMetaList(item)" :key="meta">{{ meta }}</span>
+              <div v-for="meta in detailMetaList(item)" :key="meta.key" class="detail-meta-item">
+                <span class="detail-meta-label">{{ meta.label }}</span>
+                <span class="detail-meta-value">
+                  <template v-if="meta.chips?.length">
+                    <span
+                      v-for="chip in meta.chips"
+                      :key="chip.text"
+                      class="detail-meta-tag"
+                      :class="chip.kind === 'status' ? `is-status-${chip.status}` : 'is-info'"
+                    >
+                      {{ chip.text }}
+                    </span>
+                  </template>
+                  <template v-else>{{ meta.value }}</template>
+                </span>
+              </div>
             </div>
           </div>
 
@@ -599,17 +729,78 @@ function handleDownload(item: UserHistoryCard) {
         </div>
       </div>
     </template>
-
-    <div v-if="previewVisible" style="display: none">
-      <a-image
-        :src="previewSrc"
-        :preview="{ visible: previewVisible, onVisibleChange: (v: boolean) => (previewVisible = v) }"
-      />
+        </div>
+      </div>
     </div>
-  </a-modal>
+  </Teleport>
+
+  <div v-if="previewVisible" style="display: none">
+    <a-image
+      :src="previewSrc"
+      :preview="{ visible: previewVisible, onVisibleChange: (v: boolean) => (previewVisible = v) }"
+    />
+  </div>
 </template>
 
 <style scoped lang="scss">
+.history-task-detail-overlay {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1200;
+  display: flex;
+  flex-direction: column;
+  background: var(--theme-panel-bg, #fffaf2);
+}
+
+.history-task-detail-panel {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.history-task-detail-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--theme-panel-border);
+  background: var(--theme-modal-header-bg, #fff8ec);
+}
+
+.history-task-detail-title {
+  color: var(--theme-title);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.history-task-detail-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--theme-title);
+  cursor: pointer;
+}
+
+.history-task-detail-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 :global(.history-detail-modal .ant-modal) {
   max-width: calc(100vw - 32px);
 }
@@ -802,11 +993,12 @@ function handleDownload(item: UserHistoryCard) {
 .detail-layout {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
-  gap: 20px;
+  grid-template-columns: minmax(0, 1.7fr) minmax(280px, 0.55fr);
+  gap: 0;
   align-items: stretch;
+  flex: 1 1 auto;
   min-height: 0;
-  height: min(78vh, 760px);
+  height: 100%;
   animation: history-detail-slide-in var(--motion-duration-reveal-slower) var(--motion-ease-enter) both;
 }
 
@@ -817,9 +1009,38 @@ function handleDownload(item: UserHistoryCard) {
 }
 
 .detail-left {
+  position: relative;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  padding-left: 56px;
+  padding-right: 56px;
+}
+
+.detail-nav-btn {
+  position: absolute;
+  top: 50%;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--theme-panel-border);
+  border-radius: 999px;
+  background: rgba(var(--theme-surface-strong-rgb), 0.92);
+  color: var(--theme-title);
+  box-shadow: 0 10px 24px var(--theme-shadow-soft);
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.detail-nav-prev {
+  left: 8px;
+}
+
+.detail-nav-next {
+  right: 8px;
 }
 
 .detail-left > .detail-section {
@@ -834,7 +1055,8 @@ function handleDownload(item: UserHistoryCard) {
   flex-direction: column;
   overflow-y: auto;
   min-height: 0;
-  padding-right: 4px;
+  padding: 16px 16px 44px 20px;
+  border-left: 1px solid var(--theme-panel-border);
   scrollbar-width: thin;
 }
 
@@ -1170,20 +1392,75 @@ function handleDownload(item: UserHistoryCard) {
 
 .detail-meta {
   display: flex;
-  flex-wrap: wrap;
-  padding: 12px 14px;
+  flex-direction: column;
+  padding: 2px 16px;
   border-radius: 12px;
   background: var(--theme-panel-bg-soft);
   border: 1px solid var(--theme-panel-border);
   color: var(--text-secondary);
   font-size: 13px;
-  line-height: 1.8;
+  line-height: 1.5;
+}
 
-  span:not(:last-child)::after {
-    content: "｜";
-    margin: 0 8px;
-    color: #d3b487;
-  }
+.detail-meta-item {
+  display: grid;
+  grid-template-columns: 8.5em minmax(0, 1fr);
+  align-items: center;
+  column-gap: 20px;
+  min-height: 28px;
+  padding: 3px 0;
+}
+
+.detail-meta-label {
+  color: var(--theme-title);
+  font-weight: 700;
+}
+
+.detail-meta-value {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  color: var(--theme-title);
+}
+
+.detail-meta-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.detail-meta-tag.is-status-success {
+  color: #067647;
+  background: rgba(18, 183, 106, 0.14);
+}
+
+.detail-meta-tag.is-status-failed {
+  color: #b42318;
+  background: rgba(217, 45, 32, 0.12);
+}
+
+.detail-meta-tag.is-status-processing {
+  color: #b54708;
+  background: rgba(247, 144, 9, 0.16);
+}
+
+.detail-meta-tag.is-status-queued,
+.detail-meta-tag.is-status-pending {
+  color: #175cd3;
+  background: rgba(46, 144, 250, 0.14);
+}
+
+.detail-meta-tag.is-info {
+  color: var(--theme-title);
+  background: rgba(46, 144, 250, 0.14);
 }
 
 @media (prefers-reduced-motion: reduce) {
