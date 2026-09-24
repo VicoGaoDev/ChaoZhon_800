@@ -282,9 +282,35 @@ const feedbackTarget = ref<{
 } | null>(null);
 const templateDialogRef = ref<InstanceType<typeof TemplateEditorDialog> | null>(null);
 const viewportWidth = ref(typeof window === "undefined" ? 1200 : window.innerWidth);
-const RESULT_COLUMN_OPTIONS = [2, 3, 4] as const;
+const RESULT_COLUMN_OPTIONS = [3, 4, 5, 6, 7, 8] as const;
 type ResultColumnOption = typeof RESULT_COLUMN_OPTIONS[number];
 const DEFAULT_RESULT_COLUMN_COUNT: ResultColumnOption = 3;
+const GENERATE_RESULT_CARD_ASPECT_RATIO_SESSION_KEY = "generateResultCardAspectRatio";
+const RESULT_CARD_ASPECT_OPTIONS = [
+  { label: "1:1", value: "1:1" },
+  { label: "2:3", value: "2:3" },
+  { label: "3:2", value: "3:2" },
+  { label: "3:4", value: "3:4" },
+  { label: "4:3", value: "4:3" },
+  { label: "16:9", value: "16:9" },
+  { label: "9:16", value: "9:16" },
+] as const;
+type ResultCardAspectRatio = typeof RESULT_CARD_ASPECT_OPTIONS[number]["value"];
+
+function isResultCardAspectRatio(value: string | null): value is ResultCardAspectRatio {
+  return RESULT_CARD_ASPECT_OPTIONS.some((item) => item.value === value);
+}
+
+function readStoredResultCardAspectRatio(): ResultCardAspectRatio {
+  if (typeof window === "undefined") return "1:1";
+  const storedValue = sessionStorage.getItem(GENERATE_RESULT_CARD_ASPECT_RATIO_SESSION_KEY);
+  return isResultCardAspectRatio(storedValue) ? storedValue : "1:1";
+}
+
+function writeStoredResultCardAspectRatio(value: ResultCardAspectRatio) {
+  if (typeof window === "undefined") return;
+  sessionStorage.setItem(GENERATE_RESULT_CARD_ASPECT_RATIO_SESSION_KEY, value);
+}
 
 const preferredResultColumnCount = ref<ResultColumnOption>(
   readStoredGridColumnCount(
@@ -293,15 +319,7 @@ const preferredResultColumnCount = ref<ResultColumnOption>(
     DEFAULT_RESULT_COLUMN_COUNT,
   ),
 );
-const RESULT_CARD_ASPECT_OPTIONS = [
-  { label: "1:1", value: "1:1" },
-  { label: "3:4", value: "3:4" },
-  { label: "4:3", value: "4:3" },
-  { label: "9:16", value: "9:16" },
-  { label: "16:9", value: "16:9" },
-] as const;
-type ResultCardAspectRatio = typeof RESULT_CARD_ASPECT_OPTIONS[number]["value"];
-const resultCardAspectRatio = ref<ResultCardAspectRatio>("1:1");
+const resultCardAspectRatio = ref<ResultCardAspectRatio>(readStoredResultCardAspectRatio());
 const resultViewOptionsOpen = ref(false);
 const isConfigPanelCollapsed = ref(false);
 const isDesktopGenerateLayout = computed(() => viewportWidth.value > 960);
@@ -1008,6 +1026,10 @@ const resultListStyle = computed(() => ({
 
 watch(preferredResultColumnCount, (count) => {
   writeStoredGridColumnCount(GENERATE_RESULT_COLUMN_COUNT_KEY, count);
+});
+
+watch(resultCardAspectRatio, (value) => {
+  writeStoredResultCardAspectRatio(value);
 });
 
 watch(isDesktopGenerateLayout, (desktop) => {
@@ -6032,7 +6054,7 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
 
 .generate-card-aspect-options {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
   margin-top: 10px;
 }
@@ -6081,14 +6103,16 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
 }
 
 .generate-card-aspect-icon.aspect-1-1 { width: 16px; height: 16px; }
+.generate-card-aspect-icon.aspect-2-3 { width: 13px; height: 20px; }
+.generate-card-aspect-icon.aspect-3-2 { width: 20px; height: 13px; }
 .generate-card-aspect-icon.aspect-3-4 { width: 15px; height: 20px; }
 .generate-card-aspect-icon.aspect-4-3 { width: 20px; height: 15px; }
-.generate-card-aspect-icon.aspect-9-16 { width: 13px; height: 22px; }
 .generate-card-aspect-icon.aspect-16-9 { width: 22px; height: 13px; }
+.generate-card-aspect-icon.aspect-9-16 { width: 13px; height: 22px; }
 
 .generate-view-column-group {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
   margin-top: 12px;
 
@@ -6309,8 +6333,8 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
   border-radius: 16px;
   overflow: hidden;
   border: 1px dashed var(--theme-panel-border);
-  background: var(--theme-panel-bg-soft);
-  box-shadow: 0 12px 24px var(--theme-shadow-soft);
+  background: #ffffff;
+  box-shadow: none;
   transition:
     transform var(--motion-duration-hover) var(--motion-ease-enter),
     box-shadow var(--motion-duration-hover) var(--motion-ease-soft),
@@ -6320,7 +6344,10 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
     width: 100%;
     height: 100%;
     display: block;
-    object-fit: cover;
+    object-fit: contain;
+    object-position: center;
+    box-sizing: border-box;
+    background: transparent;
     transition: transform var(--motion-duration-emphasis) var(--motion-ease-enter);
   }
 
@@ -6346,13 +6373,13 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
   &.failed {
     border-color: rgba(214, 87, 75, 0.34);
     background: linear-gradient(180deg, #fff0ed, #ffe1db);
-    box-shadow: 0 14px 26px rgba(214, 87, 75, 0.16);
+    box-shadow: none;
   }
 }
 
 .result-card:hover .result-frame.clickable {
   border-color: var(--theme-border-strong);
-  box-shadow: 0 16px 28px var(--theme-shadow-medium);
+  box-shadow: none;
 }
 
 .result-card:hover .result-frame.clickable img {
@@ -7507,8 +7534,8 @@ html:is([data-theme="dark"], [data-theme="midnight"]) .generate-page .reverse-re
 
 html:is([data-theme="dark"], [data-theme="midnight"]) .generate-page .result-frame {
   border-color: var(--theme-panel-border) !important;
-  background: var(--theme-panel-bg) !important;
-  box-shadow: 0 12px 28px var(--theme-shadow-soft) !important;
+  background: var(--theme-surface-strong) !important;
+  box-shadow: none !important;
 }
 
 html:is([data-theme="dark"], [data-theme="midnight"]) .generate-page .result-frame.pending {
@@ -7524,7 +7551,7 @@ html:is([data-theme="dark"], [data-theme="midnight"]) .generate-page .frame-stat
 
 html:is([data-theme="dark"], [data-theme="midnight"]) .generate-page .result-card:hover .result-frame.clickable {
   border-color: var(--theme-border-strong) !important;
-  box-shadow: 0 18px 30px var(--theme-shadow-medium) !important;
+  box-shadow: none !important;
 }
 
 html:is([data-theme="dark"], [data-theme="midnight"]) .generate-page .result-empty {
