@@ -105,6 +105,7 @@ def on_startup():
         _ensure_prompt_optimize_schema()
         _ensure_image_required_columns()
         _ensure_task_credit_cost_column()
+        _ensure_admin_query_indexes()
         _ensure_task_api_attempt_schema()
         _ensure_external_api_config_required_columns()
         _ensure_scene_binding_required_columns()
@@ -1166,6 +1167,82 @@ def _ensure_prompt_optimize_schema():
             )
             """
         ))
+
+
+def _ensure_named_indexes(table_name: str, indexes: list[tuple[str, str]]):
+    inspector = inspect(engine)
+    if table_name not in inspector.get_table_names():
+        return
+    existing = {index["name"] for index in inspector.get_indexes(table_name)}
+    missing = [(name, statement) for name, statement in indexes if name not in existing]
+    if not missing:
+        return
+    with engine.begin() as conn:
+        for _name, statement in missing:
+            conn.execute(text(statement))
+
+
+def _ensure_admin_query_indexes():
+    _ensure_named_indexes("tasks", [
+        (
+            "idx_tasks_request_finished_at",
+            "CREATE INDEX idx_tasks_request_finished_at ON tasks (request_finished_at)",
+        ),
+        (
+            "idx_tasks_status_deleted_created",
+            "CREATE INDEX idx_tasks_status_deleted_created ON tasks (status, is_deleted, created_at)",
+        ),
+        (
+            "idx_tasks_user_status_deleted_created",
+            "CREATE INDEX idx_tasks_user_status_deleted_created ON tasks (user_id, status, is_deleted, created_at)",
+        ),
+        (
+            "idx_tasks_user_status_deleted_created_id",
+            "CREATE INDEX idx_tasks_user_status_deleted_created_id ON tasks (user_id, status, is_deleted, created_at, id)",
+        ),
+        (
+            "idx_tasks_user_status_created_id",
+            "CREATE INDEX idx_tasks_user_status_created_id ON tasks (user_id, status, created_at, id)",
+        ),
+        (
+            "idx_tasks_user_created_id",
+            "CREATE INDEX idx_tasks_user_created_id ON tasks (user_id, created_at, id)",
+        ),
+        (
+            "idx_tasks_created_status_source_mode_model_user",
+            "CREATE INDEX idx_tasks_created_status_source_mode_model_user ON tasks (created_at, status, source, mode, model, user_id)",
+        ),
+    ])
+    _ensure_named_indexes("images", [
+        (
+            "idx_images_task_deleted_id",
+            "CREATE INDEX idx_images_task_deleted_id ON images (task_id, is_deleted, id)",
+        ),
+        (
+            "idx_images_task_deleted_status_id",
+            "CREATE INDEX idx_images_task_deleted_status_id ON images (task_id, is_deleted, status, id)",
+        ),
+    ])
+    _ensure_named_indexes("credit_logs", [
+        (
+            "idx_credit_logs_task_type_desc",
+            "CREATE INDEX idx_credit_logs_task_type_desc ON credit_logs (task_id, type, description(191))",
+        ),
+        (
+            "idx_credit_logs_type_desc_user_created_id",
+            "CREATE INDEX idx_credit_logs_type_desc_user_created_id ON credit_logs (type, description(191), user_id, created_at, id)",
+        ),
+    ])
+    _ensure_named_indexes("prompt_history", [
+        (
+            "idx_prompt_history_mode_user_created",
+            "CREATE INDEX idx_prompt_history_mode_user_created ON prompt_history (mode, user_id, created_at)",
+        ),
+        (
+            "idx_prompt_history_mode_created_id_user",
+            "CREATE INDEX idx_prompt_history_mode_created_id_user ON prompt_history (mode, created_at, id, user_id)",
+        ),
+    ])
 
 
 def _ensure_task_credit_cost_column():

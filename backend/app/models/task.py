@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, Integer, String, Text, DateTime, ForeignKey, func
+from sqlalchemy import Boolean, Column, Integer, String, Text, DateTime, ForeignKey, Index, func
 from sqlalchemy.orm import relationship
 from app.database import Base
 from app.utils.business_id import generate_business_id
@@ -6,6 +6,7 @@ from app.utils.business_id import generate_business_id
 
 class Task(Base):
     __tablename__ = "tasks"
+    __table_args__ = (Index("idx_tasks_request_finished_at", "request_finished_at"),)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     business_id = Column(String(32), unique=True, nullable=False, index=True, default=generate_business_id)
