@@ -330,7 +330,7 @@ def admin_promo_stats_user_detail(
 
 @router.get("/analytics/summary", response_model=AnalyticsSummaryOut)
 def admin_analytics_summary(
-    granularity: str = Query("day", pattern="^(day|week|month)$"),
+    granularity: str = Query("day", pattern="^(3hour|day|week|month)$"),
     start_date: Optional[datetime] = Query(None),
     end_date: Optional[datetime] = Query(None),
     user_id: Optional[str] = Query(None),
@@ -338,6 +338,7 @@ def admin_analytics_summary(
     model: Optional[str] = Query(None),
     mode: Optional[str] = Query(None, pattern="^(text_generate|image_edit|inpaint|promptReverse|promptOptimize)$"),
     status: Optional[str] = Query(None),
+    include_unsafe_tasks: bool = Query(True),
     _user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
@@ -352,12 +353,13 @@ def admin_analytics_summary(
         model=model,
         mode=mode,
         status_filter=status,
+        include_unsafe_tasks=include_unsafe_tasks,
     )
 
 
 @router.get("/analytics/timeseries", response_model=AnalyticsTimeseriesOut)
 def admin_analytics_timeseries(
-    granularity: str = Query("day", pattern="^(day|week|month)$"),
+    granularity: str = Query("day", pattern="^(3hour|day|week|month)$"),
     start_date: Optional[datetime] = Query(None),
     end_date: Optional[datetime] = Query(None),
     user_id: Optional[str] = Query(None),
@@ -365,6 +367,7 @@ def admin_analytics_timeseries(
     model: Optional[str] = Query(None),
     mode: Optional[str] = Query(None, pattern="^(text_generate|image_edit|inpaint|promptReverse|promptOptimize)$"),
     status: Optional[str] = Query(None),
+    include_unsafe_tasks: bool = Query(True),
     _user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
@@ -379,12 +382,13 @@ def admin_analytics_timeseries(
         model=model,
         mode=mode,
         status_filter=status,
+        include_unsafe_tasks=include_unsafe_tasks,
     )
 
 
 @router.get("/analytics/breakdown", response_model=AnalyticsBreakdownOut)
 def admin_analytics_breakdown(
-    granularity: str = Query("day", pattern="^(day|week|month)$"),
+    granularity: str = Query("day", pattern="^(3hour|day|week|month)$"),
     start_date: Optional[datetime] = Query(None),
     end_date: Optional[datetime] = Query(None),
     user_id: Optional[str] = Query(None),
@@ -392,6 +396,7 @@ def admin_analytics_breakdown(
     model: Optional[str] = Query(None),
     mode: Optional[str] = Query(None, pattern="^(text_generate|image_edit|inpaint|promptReverse|promptOptimize)$"),
     status: Optional[str] = Query(None),
+    include_unsafe_tasks: bool = Query(True),
     _user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
@@ -406,6 +411,7 @@ def admin_analytics_breakdown(
         model=model,
         mode=mode,
         status_filter=status,
+        include_unsafe_tasks=include_unsafe_tasks,
     )
 
 
@@ -518,6 +524,7 @@ def admin_history(
     mode: Optional[str] = Query(None, pattern="^(text_generate|image_edit|inpaint|promptReverse|promptOptimize)$"),
     start_date: Optional[datetime] = Query(None),
     end_date: Optional[datetime] = Query(None),
+    include_unsafe_tasks: bool = Query(True),
     _user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
@@ -528,6 +535,7 @@ def admin_history(
         source=source,
         model=model, mode=mode,
         start_date=start_date, end_date=end_date,
+        include_unsafe_tasks=include_unsafe_tasks,
     )
 
 

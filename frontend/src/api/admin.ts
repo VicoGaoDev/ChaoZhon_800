@@ -59,6 +59,7 @@ function buildAnalyticsParams(query: AdminAnalyticsQuery): Record<string, unknow
   if (query.model) params.model = query.model;
   if (query.mode) params.mode = query.mode;
   if (query.status) params.status = query.status;
+  if (typeof query.include_unsafe_tasks === "boolean") params.include_unsafe_tasks = query.include_unsafe_tasks;
   return params;
 }
 
@@ -209,6 +210,7 @@ export function getAdminHistory(
   if (filter?.mode) params.mode = filter.mode;
   if (filter?.start_date) params.start_date = filter.start_date;
   if (filter?.end_date) params.end_date = filter.end_date;
+  if (typeof filter?.include_unsafe_tasks === "boolean") params.include_unsafe_tasks = filter.include_unsafe_tasks;
   return client.get("/admin/history", { params });
 }
 

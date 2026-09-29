@@ -126,6 +126,7 @@ export interface HistoryFilter {
   user_id?: string;
   start_date?: string;
   end_date?: string;
+  include_unsafe_tasks?: boolean;
   used_fallback_api?: boolean;
   respect_pins?: boolean;
   include_prompt_reverse?: boolean;
@@ -822,7 +823,7 @@ export interface AdminStats {
   active_users: number;
 }
 
-export type AdminAnalyticsGranularity = "day" | "week" | "month";
+export type AdminAnalyticsGranularity = "3hour" | "day" | "week" | "month";
 
 export interface AdminAnalyticsQuery {
   granularity: AdminAnalyticsGranularity;
@@ -833,6 +834,7 @@ export interface AdminAnalyticsQuery {
   model?: string;
   mode?: TaskType;
   status?: string;
+  include_unsafe_tasks?: boolean;
 }
 
 export interface AdminAnalyticsMetric {
@@ -853,6 +855,9 @@ export interface AdminAnalyticsSummary {
   credits_consumed: AdminAnalyticsMetric;
   new_users: AdminAnalyticsMetric;
   active_users: AdminAnalyticsMetric;
+  fallback_task_total?: number;
+  fallback_success_tasks?: number;
+  fallback_failed_tasks?: number;
 }
 
 export interface AdminAnalyticsTimeseriesPoint {
@@ -897,12 +902,36 @@ export interface AdminDailyReportTestResult {
   credit_consumed: number;
 }
 
+export interface AdminAnalyticsModelCompareItem {
+  name: string;
+  count: number;
+  success_count: number;
+  failed_count: number;
+  success_rate: number;
+  credit_cost: number;
+  avg_credit_cost: number;
+  duration_count: number;
+  avg_duration_seconds: number;
+}
+
+export interface AdminAnalyticsApiAttemptPerformanceItem {
+  api_config_id?: number | null;
+  name: string;
+  call_count: number;
+  task_duration_count: number;
+  avg_task_duration_seconds: number;
+  download_count: number;
+  avg_result_download_ms: number;
+}
+
 export interface AdminAnalyticsBreakdown {
   range_label: string;
   status_breakdown: AdminAnalyticsBreakdownItem[];
   source_breakdown: AdminAnalyticsBreakdownItem[];
   mode_breakdown: AdminAnalyticsBreakdownItem[];
   model_breakdown: AdminAnalyticsBreakdownItem[];
+  model_compare?: AdminAnalyticsModelCompareItem[];
+  api_attempt_performance?: AdminAnalyticsApiAttemptPerformanceItem[];
   top_users_by_tasks: AdminAnalyticsBreakdownItem[];
   top_users_by_credit: AdminAnalyticsBreakdownItem[];
 }

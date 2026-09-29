@@ -55,7 +55,7 @@ const history = ref<HistoryItem[]>([]);
 const historyTotal = ref(0);
 const historyCreditTotal = ref(0);
 const page = ref(1);
-const granularity = ref<AdminAnalyticsGranularity>("day");
+const granularity = ref<AdminAnalyticsGranularity>("3hour");
 const preset = ref("today");
 const ready = ref(false);
 const detailOpen = ref(false);
@@ -76,6 +76,7 @@ const filters = reactive<{
   source: TaskSource | undefined;
   model: string | undefined;
   mode: TaskType | undefined;
+  include_unsafe_tasks: boolean;
   dateRange: [Dayjs, Dayjs] | null;
 }>({
   status: undefined,
@@ -83,6 +84,7 @@ const filters = reactive<{
   source: undefined,
   model: undefined,
   mode: undefined,
+  include_unsafe_tasks: true,
   dateRange: null,
 });
 
@@ -123,6 +125,7 @@ const activeFilterSummary = computed(() => {
   if (filters.mode) chips.push(`类型：${modeLabel(filters.mode)}`);
   if (filters.model) chips.push(`模型：${modelLabel(filters.model)}`);
   if (filters.status) chips.push(`状态：${statusLabel(filters.status)}`);
+  if (!filters.include_unsafe_tasks) chips.push("错误任务：不含不合规");
   if (filters.dateRange) {
     chips.push(
       `${filters.dateRange[0].format("YYYY-MM-DD")} ~ ${filters.dateRange[1].format("YYYY-MM-DD")}`,
@@ -140,11 +143,66 @@ const filterSignature = computed(() => JSON.stringify({
   source: filters.source || null,
   model: filters.model || null,
   mode: filters.mode || null,
+  include_unsafe_tasks: filters.include_unsafe_tasks,
   start: filters.dateRange?.[0]?.valueOf() || null,
   end: filters.dateRange?.[1]?.valueOf() || null,
 }));
 
+type FallbackCardItem = {
+  key: string;
+  label: string;
+  value: number | string;
+  desc: string;
+  color: string;
+};
+
+const fallbackSummaryCards = computed<FallbackCardItem[]>(() => {
+  if (!summary.value) return [];
+  const fallbackTaskTotal = summary.value.fallback_task_total ?? 0;
+  const fallbackSuccessTasks = summary.value.fallback_success_tasks ?? 0;
+  const fallbackFailedTasks = summary.value.fallback_failed_tasks ?? 0;
+  const resolvedFallbackTasks = fallbackSuccessTasks + fallbackFailedTasks;
+  const fallbackSuccessRate = resolvedFallbackTasks
+    ? `${((fallbackSuccessTasks / resolvedFallbackTasks) * 100).toFixed(1)}%`
+    : "0%";
+  return [
+    {
+      key: "fallback_total",
+      label: "触发备用接口任务数",
+      value: fallbackTaskTotal,
+      desc: "当前时间范围内触发备用接口的任务数量",
+      color: "#1890ff",
+    },
+    {
+      key: "fallback_success",
+      label: "最终成功数",
+      value: fallbackSuccessTasks,
+      desc: "当前时间范围内触发备用接口后最终成功的任务数量",
+      color: "#38a816",
+    },
+    {
+      key: "fallback_failed",
+      label: "最终失败数",
+      value: fallbackFailedTasks,
+      desc: "当前时间范围内触发备用接口后最终失败的任务数量",
+      color: "#ff4d4f",
+    },
+    {
+      key: "fallback_success_rate",
+      label: "最终成功率",
+      value: fallbackSuccessRate,
+      desc: "当前时间范围内已结束的备用接口任务中最终成功的占比",
+      color: "#1677ff",
+    },
+  ];
+});
+
+const processingTaskCount = computed(() => (
+  breakdown.value?.status_breakdown.find((item) => item.name === "processing")?.count ?? 0
+));
+
 function defaultPresetByGranularity(value: AdminAnalyticsGranularity) {
+  if (value === "3hour") return "today";
   if (value === "week") return "8w";
   if (value === "month") return "6m";
   return "today";
@@ -188,6 +246,7 @@ function applyPresetRange(value: string) {
 }
 
 function buildAnalyticsQuery(): AdminAnalyticsQuery {
+  const useBucketRange = granularity.value === "3hour" && preset.value === "custom";
   return {
     granularity: granularity.value,
     status: filters.status,
@@ -195,20 +254,23 @@ function buildAnalyticsQuery(): AdminAnalyticsQuery {
     source: filters.source,
     model: filters.model,
     mode: filters.mode,
-    start_date: formatQueryDate(filters.dateRange?.[0].startOf("day")),
-    end_date: formatQueryDate(filters.dateRange?.[1].endOf("day")),
+    include_unsafe_tasks: filters.include_unsafe_tasks,
+    start_date: formatQueryDate(useBucketRange ? filters.dateRange?.[0] : filters.dateRange?.[0].startOf("day")),
+    end_date: formatQueryDate(useBucketRange ? filters.dateRange?.[1] : filters.dateRange?.[1].endOf("day")),
   };
 }
 
 function buildHistoryFilter(): HistoryFilter {
+  const useBucketRange = granularity.value === "3hour" && preset.value === "custom";
   return {
     status: filters.status,
     user_id: filters.user_id,
     source: filters.source,
     model: filters.model,
     mode: filters.mode,
-    start_date: formatQueryDate(filters.dateRange?.[0].startOf("day")),
-    end_date: formatQueryDate(filters.dateRange?.[1].endOf("day")),
+    include_unsafe_tasks: filters.include_unsafe_tasks,
+    start_date: formatQueryDate(useBucketRange ? filters.dateRange?.[0] : filters.dateRange?.[0].startOf("day")),
+    end_date: formatQueryDate(useBucketRange ? filters.dateRange?.[1] : filters.dateRange?.[1].endOf("day")),
   };
 }
 
@@ -347,12 +409,23 @@ async function loadPageData() {
   await Promise.all([loadAnalytics(), loadHistory()]);
 }
 
+function handleKpiCardClick(key: string) {
+  if (key === "failed_tasks") {
+    router.push("/admin/error-analytics");
+    return;
+  }
+  if (key === "new_users") {
+    router.push("/admin/users");
+  }
+}
+
 function handleReset() {
   filters.status = undefined;
   filters.user_id = undefined;
   filters.source = undefined;
   filters.model = undefined;
   filters.mode = undefined;
+  filters.include_unsafe_tasks = true;
   preset.value = defaultPresetByGranularity(granularity.value);
   applyPresetRange(preset.value);
 }
@@ -572,7 +645,34 @@ watch(filterSignature, async () => {
         <h3 class="section-title">核心指标</h3>
         <span class="section-kicker">Overview</span>
       </div>
-      <KpiCards :summary="summary" :loading="analyticsLoading" />
+      <KpiCards
+        :summary="summary"
+        :loading="analyticsLoading"
+        :processing-tasks="processingTaskCount"
+        @card-click="handleKpiCardClick"
+      />
+    </section>
+
+    <section class="dashboard-section">
+      <div class="section-title-row">
+        <h3 class="section-title">备用接口任务</h3>
+        <span class="section-kicker">Fallback</span>
+      </div>
+      <div class="overview-grid">
+        <div
+          v-for="(item, index) in fallbackSummaryCards"
+          :key="item.key"
+          class="overview-card warm-card motion-card-lift motion-fade-up"
+          :style="{ '--motion-delay': `${220 + index * 40}ms` }"
+        >
+          <div class="overview-card-head">
+            <span class="overview-card-label">{{ item.label }}</span>
+            <span class="overview-card-dot" :style="{ background: item.color }" />
+          </div>
+          <div class="overview-card-value" :style="{ color: item.color }">{{ item.value }}</div>
+          <div class="overview-card-desc">{{ item.desc }}</div>
+        </div>
+      </div>
     </section>
 
     <section class="dashboard-section">
@@ -743,6 +843,54 @@ watch(filterSignature, async () => {
 
 .dashboard-section {
   padding-top: 2px;
+}
+
+.overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.overview-card {
+  min-height: 116px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.overview-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.overview-card-label {
+  color: #8c7458;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.overview-card-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  box-shadow: 0 0 0 4px rgba(255, 193, 90, 0.14);
+}
+
+.overview-card-value {
+  font-size: 30px;
+  line-height: 1.1;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.overview-card-desc {
+  color: #9a805b;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .section-title-row {

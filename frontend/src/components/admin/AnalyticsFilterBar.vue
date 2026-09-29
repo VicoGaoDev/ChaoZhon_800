@@ -10,6 +10,7 @@ type FilterState = {
   source?: TaskSource;
   model?: string;
   mode?: TaskType;
+  include_unsafe_tasks: boolean;
   dateRange: [Dayjs, Dayjs] | null;
 };
 
@@ -53,6 +54,14 @@ const emit = defineEmits<{
 }>();
 
 const presetOptions = computed(() => {
+  if (props.granularity === "3hour") {
+    return [
+      { key: "today", label: "今日" },
+      { key: "3d", label: "近 3 天" },
+      { key: "7d", label: "近 7 天" },
+      { key: "30d", label: "近 30 天" },
+    ];
+  }
   if (props.granularity === "week") {
     return [
       { key: "8w", label: "近 8 周" },
@@ -84,6 +93,7 @@ const presetOptions = computed(() => {
           button-style="solid"
           @update:value="emit('update:granularity', $event)"
         >
+          <a-radio-button value="3hour">每3小时</a-radio-button>
           <a-radio-button value="day">按日</a-radio-button>
           <a-radio-button value="week">按周</a-radio-button>
           <a-radio-button value="month">按月</a-radio-button>
@@ -178,6 +188,14 @@ const presetOptions = computed(() => {
         </a-select-option>
       </a-select>
 
+      <a-select
+        v-model:value="filters.include_unsafe_tasks"
+        class="analytics-filter-select analytics-filter-unsafe"
+      >
+        <a-select-option :value="true">包含不合规错误</a-select-option>
+        <a-select-option :value="false">不含不合规错误</a-select-option>
+      </a-select>
+
       <a-range-picker
         v-model:value="filters.dateRange"
         class="analytics-filter-date"
@@ -198,6 +216,10 @@ const presetOptions = computed(() => {
   width: 168px;
 }
 
+.analytics-filter-unsafe {
+  width: 168px;
+}
+
 :deep(.analytics-filter-select .ant-select-selector) {
   border-radius: 12px !important;
   border-color: var(--theme-control-border) !important;
@@ -213,6 +235,7 @@ const presetOptions = computed(() => {
 @media (max-width: 768px) {
   .analytics-filter-select,
   .analytics-filter-model,
+  .analytics-filter-unsafe,
   .analytics-filter-date {
     width: 100%;
   }

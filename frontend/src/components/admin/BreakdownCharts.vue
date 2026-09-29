@@ -19,13 +19,36 @@ const emit = defineEmits<{
   (e: "filter-click", payload: { type: "status" | "source" | "mode" | "model" | "user"; value: string }): void;
 }>();
 
+const modelCompare = computed(() => props.data?.model_compare || []);
+const apiAttemptPerformance = computed(() => props.data?.api_attempt_performance || []);
+
+const hasApiAttemptPerformance = computed(() => (
+  apiAttemptPerformance.value.some((item) => item.call_count > 0 || item.task_duration_count > 0 || item.download_count > 0)
+));
+
+function formatDurationSeconds(value: number | undefined) {
+  const seconds = Number(value || 0);
+  if (!Number.isFinite(seconds) || seconds <= 0) return "-";
+  const durationMs = seconds * 1000;
+  if (durationMs < 1000) return `${Math.round(durationMs)} ms`;
+  return `${seconds.toFixed(2)} s`;
+}
+
+function formatDurationMs(value: number | undefined) {
+  const durationMs = Number(value || 0);
+  if (!Number.isFinite(durationMs) || durationMs <= 0) return "-";
+  if (durationMs < 1000) return `${Math.round(durationMs)} ms`;
+  return `${(durationMs / 1000).toFixed(2)} s`;
+}
+
 const hasBreakdownData = computed(() => {
   if (!props.data) return false;
-  return [
+  return hasApiAttemptPerformance.value || [
     ...props.data.status_breakdown,
     ...props.data.source_breakdown,
     ...props.data.mode_breakdown,
     ...props.data.model_breakdown,
+    ...modelCompare.value,
     ...props.data.top_users_by_tasks,
     ...props.data.top_users_by_credit,
   ].some((item) => item.count > 0 || item.credit_cost > 0);
@@ -122,21 +145,153 @@ const sourcePieOption = computed(() => ({
   ],
 }));
 
-const modelBarOption = computed(() => ({
+const modelCompareOption = computed(() => ({
+  color: ["#1890ff", "#fa8c16", "#52c41a"],
   tooltip: {
     trigger: "axis",
     backgroundColor: "rgba(76, 52, 26, 0.92)",
     borderWidth: 0,
     textStyle: { color: "#fffdf8" },
+    formatter: (params: Array<{ axisValue?: string; dataIndex?: number }>) => {
+      const dataIndex = params[0]?.dataIndex ?? 0;
+      const item = modelCompare.value[dataIndex];
+      const name = item?.name || params[0]?.axisValue || "";
+      if (!item) return name;
+      return [
+        name,
+        `用量：${item.count}`,
+        `成功 / 失败：${item.success_count} / ${item.failed_count}`,
+        `成功率：${item.success_rate}%（已结束任务）`,
+        `单次平均接口耗时：${formatDurationSeconds(item.avg_duration_seconds)}`,
+      ].join("<br/>");
+    },
   },
-  grid: { left: 40, right: 20, top: 20, bottom: 48 },
-  xAxis: { type: "category", data: (props.data?.model_breakdown || []).map((item) => item.name), axisLabel: { interval: 0, rotate: 18 } },
-  yAxis: { type: "value" },
+  legend: { top: 0 },
+  grid: { left: 40, right: 72, top: 44, bottom: 52 },
+  xAxis: {
+    type: "category",
+    data: modelCompare.value.map((item) => item.name),
+    axisLabel: { interval: 0, rotate: 18 },
+  },
+  yAxis: [
+    {
+      type: "value",
+      name: "用量",
+    },
+    {
+      type: "value",
+      name: "接口耗时",
+      splitLine: { show: false },
+      axisLabel: { formatter: "{value}秒" },
+    },
+    {
+      type: "value",
+      name: "成功率",
+      min: 0,
+      max: 100,
+      offset: 40,
+      splitLine: { show: false },
+      axisLabel: { formatter: "{value}%" },
+    },
+  ],
   series: [
     {
+      name: "用量",
       type: "bar",
-      data: (props.data?.model_breakdown || []).map((item) => item.count),
+      yAxisIndex: 0,
+      data: modelCompare.value.map((item) => item.count),
       itemStyle: { color: "#1890ff", borderRadius: [8, 8, 0, 0] },
+    },
+    {
+      name: "单次接口耗时",
+      type: "line",
+      yAxisIndex: 1,
+      smooth: true,
+      symbolSize: 8,
+      lineStyle: { width: 3 },
+      data: modelCompare.value.map((item) => item.avg_duration_seconds ?? 0),
+      itemStyle: { color: "#fa8c16" },
+    },
+    {
+      name: "成功率",
+      type: "line",
+      yAxisIndex: 2,
+      smooth: true,
+      symbolSize: 8,
+      lineStyle: { width: 3 },
+      data: modelCompare.value.map((item) => item.success_rate),
+      itemStyle: { color: "#52c41a" },
+    },
+  ],
+}));
+
+const apiAttemptPerformanceOption = computed(() => ({
+  color: ["#2f54eb", "#fa8c16", "#52c41a"],
+  tooltip: {
+    trigger: "axis",
+    backgroundColor: "rgba(76, 52, 26, 0.92)",
+    borderWidth: 0,
+    textStyle: { color: "#fffdf8" },
+    formatter: (params: Array<{ axisValue?: string; dataIndex?: number }>) => {
+      const dataIndex = params[0]?.dataIndex ?? 0;
+      const item = apiAttemptPerformance.value[dataIndex];
+      const name = item?.name || params[0]?.axisValue || "";
+      if (!item) return name;
+      return [
+        name,
+        `调用次数：${item.call_count}`,
+        `平均调用耗时：${formatDurationSeconds(item.avg_task_duration_seconds)}`,
+        `平均下载耗时：${formatDurationMs(item.avg_result_download_ms)}`,
+        `下载样本数：${item.download_count}`,
+      ].join("<br/>");
+    },
+  },
+  legend: { top: 0 },
+  grid: { left: 40, right: 72, top: 44, bottom: 56 },
+  xAxis: {
+    type: "category",
+    data: apiAttemptPerformance.value.map((item) => item.name),
+    axisLabel: { interval: 0, rotate: 18 },
+  },
+  yAxis: [
+    {
+      type: "value",
+      name: "调用次数",
+    },
+    {
+      type: "value",
+      name: "平均耗时",
+      splitLine: { show: false },
+      axisLabel: { formatter: "{value}秒" },
+    },
+  ],
+  series: [
+    {
+      name: "调用次数",
+      type: "bar",
+      yAxisIndex: 0,
+      data: apiAttemptPerformance.value.map((item) => item.call_count),
+      itemStyle: { color: "#2f54eb", borderRadius: [8, 8, 0, 0] },
+    },
+    {
+      name: "平均调用耗时",
+      type: "line",
+      yAxisIndex: 1,
+      smooth: true,
+      symbolSize: 8,
+      lineStyle: { width: 3 },
+      data: apiAttemptPerformance.value.map((item) => item.avg_task_duration_seconds ?? 0),
+      itemStyle: { color: "#fa8c16" },
+    },
+    {
+      name: "平均下载耗时",
+      type: "line",
+      yAxisIndex: 1,
+      smooth: true,
+      symbolSize: 8,
+      lineStyle: { width: 3 },
+      data: apiAttemptPerformance.value.map((item) => (item.avg_result_download_ms || 0) / 1000),
+      itemStyle: { color: "#52c41a" },
     },
   ],
 }));
@@ -200,7 +355,7 @@ function handleSourceClick(params: { data?: unknown }) {
 }
 
 function handleModelClick(params: { dataIndex?: number }) {
-  const item = props.data?.model_breakdown[params.dataIndex || 0];
+  const item = modelCompare.value[params.dataIndex || 0] || props.data?.model_breakdown[params.dataIndex || 0];
   if (item) emit("filter-click", { type: "model", value: item.name });
 }
 
@@ -251,12 +406,22 @@ function handleUserCreditClick(params: { dataIndex?: number }) {
       <div class="breakdown-card warm-card motion-card-lift motion-fade-up" style="--motion-delay: 340ms">
         <div class="breakdown-head">
           <div>
-            <div class="breakdown-title">模型使用 Top</div>
-            <div class="breakdown-desc">了解当前最常被使用的模型。</div>
+            <div class="breakdown-title">模型用量 / 成功率 / 平均耗时</div>
+            <div class="breakdown-desc">对照高频模型的使用量、成功率和单次平均接口耗时。</div>
           </div>
-          <div class="breakdown-badge">排行</div>
+          <div class="breakdown-badge">对照</div>
         </div>
-        <VChart class="breakdown-chart" :option="modelBarOption" autoresize @click="handleModelClick" />
+        <VChart class="breakdown-chart" :option="modelCompareOption" autoresize @click="handleModelClick" />
+      </div>
+      <div v-if="hasApiAttemptPerformance" class="breakdown-card warm-card motion-card-lift motion-fade-up" style="--motion-delay: 360ms">
+        <div class="breakdown-head">
+          <div>
+            <div class="breakdown-title">接口调用次数 / 任务耗时 / 下载耗时</div>
+            <div class="breakdown-desc">按每一次接口调用统计耗时，并单独统计成功调用的结果图下载耗时。</div>
+          </div>
+          <div class="breakdown-badge">接口</div>
+        </div>
+        <VChart class="breakdown-chart" :option="apiAttemptPerformanceOption" autoresize />
       </div>
       <div class="breakdown-card warm-card motion-card-lift motion-fade-up" style="--motion-delay: 380ms">
         <div class="breakdown-head">

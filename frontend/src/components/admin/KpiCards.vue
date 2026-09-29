@@ -9,7 +9,34 @@ type CardItem = {
   color: string;
   metric?: AdminAnalyticsMetric;
   plainValue?: number;
+  clickable?: boolean;
+  suffix?: string;
+  chipText?: string;
+  deltaText?: string;
 };
+
+function getSuccessRateColor(rate: number) {
+  if (rate >= 95) return "#52c41a";
+  if (rate >= 90) return "#fa8c16";
+  return "#ff4d4f";
+}
+
+function buildSuccessRateMetric(
+  successTasks: AdminAnalyticsMetric,
+  failedTasks: AdminAnalyticsMetric,
+): AdminAnalyticsMetric {
+  const currentFinished = successTasks.current + failedTasks.current;
+  const previousFinished = successTasks.previous + failedTasks.previous;
+  const current = currentFinished
+    ? Number(((successTasks.current / currentFinished) * 100).toFixed(1))
+    : 0;
+  const previous = previousFinished
+    ? Number(((successTasks.previous / previousFinished) * 100).toFixed(1))
+    : 0;
+  const delta = Number((current - previous).toFixed(1));
+  const delta_pct = previous === 0 ? null : Number(((delta / previous) * 100).toFixed(1));
+  return { current, previous, delta, delta_pct };
+}
 
 const props = defineProps({
   summary: {
@@ -20,25 +47,47 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  processingTasks: {
+    type: Number,
+    default: 0,
+  },
 });
+
+const emit = defineEmits<{
+  "card-click": [key: string];
+}>();
 
 const cards = computed<CardItem[]>(() => {
   if (!props.summary) return [];
+  const successRateMetric = buildSuccessRateMetric(props.summary.success_tasks, props.summary.failed_tasks);
   return [
     { key: "tasks_created", label: "任务总数", color: "#1890ff", metric: props.summary.tasks_created },
     { key: "success_tasks", label: "成功任务数", color: "#52c41a", metric: props.summary.success_tasks },
-    { key: "failed_tasks", label: "失败任务数", color: "#ff4d4f", metric: props.summary.failed_tasks },
+    { key: "failed_tasks", label: "失败任务数", color: "#ff4d4f", metric: props.summary.failed_tasks, clickable: true },
+    { key: "processing_tasks", label: "进行中任务数", color: "#2f54eb", plainValue: props.processingTasks, chipText: "当前周期", deltaText: "来自任务状态占比" },
     { key: "credits_consumed", label: "消耗积分", color: "#fa8c16", metric: props.summary.credits_consumed },
-    { key: "new_users", label: "新增用户数", color: "#722ed1", metric: props.summary.new_users },
+    {
+      key: "success_rate",
+      label: "周期成功率",
+      color: getSuccessRateColor(successRateMetric.current),
+      metric: successRateMetric,
+      suffix: "%",
+    },
     { key: "active_users", label: "活跃用户数", color: "#13c2c2", metric: props.summary.active_users },
+    { key: "new_users", label: "新增用户数", color: "#722ed1", metric: props.summary.new_users, clickable: true },
   ];
 });
 
-function formatDelta(metric?: AdminAnalyticsMetric) {
+function formatDelta(metric?: AdminAnalyticsMetric, suffix = "") {
   if (!metric) return "";
   const sign = metric.delta > 0 ? "+" : "";
-  if (metric.delta_pct == null) return `较上期 ${sign}${metric.delta}`;
-  return `较上期 ${sign}${metric.delta} (${sign}${metric.delta_pct}%)`;
+  if (metric.delta_pct == null) return `较上期 ${sign}${metric.delta}${suffix}`;
+  return `较上期 ${sign}${metric.delta}${suffix} (${sign}${metric.delta_pct}%)`;
+}
+
+function handleCardClick(card: CardItem) {
+  if (!card.clickable) return;
+  emit("card-click", card.key);
 }
 </script>
 
@@ -49,27 +98,29 @@ function formatDelta(metric?: AdminAnalyticsMetric) {
         v-for="(card, index) in cards"
         :key="card.key"
         class="kpi-card warm-card motion-card-lift motion-fade-up"
+        :class="{ 'kpi-card-clickable': card.clickable }"
         :style="{ '--motion-delay': `${180 + Math.min(index, 5) * 45}ms` }"
+        @click="handleCardClick(card)"
       >
         <div class="kpi-head">
           <div class="kpi-label-wrap">
             <span class="kpi-dot" :style="{ background: card.color }" />
             <div class="kpi-label">{{ card.label }}</div>
           </div>
-          <div class="kpi-chip">{{ card.metric ? "周期对比" : "累计" }}</div>
+          <div class="kpi-chip">{{ card.chipText || (card.metric ? "周期对比" : "累计") }}</div>
         </div>
         <div class="kpi-value" :style="{ color: card.color }">
-          {{ card.metric ? card.metric.current : card.plainValue }}
+          {{ card.metric ? card.metric.current : (card.plainValue ?? 0) }}{{ card.suffix || "" }}
         </div>
         <div v-if="card.metric" class="kpi-meta">
           <span class="kpi-meta-label">上期</span>
-          <span class="kpi-meta-value">{{ card.metric.previous }}</span>
+          <span class="kpi-meta-value">{{ card.metric.previous }}{{ card.suffix || "" }}</span>
         </div>
         <div
           class="kpi-delta"
           :class="{ positive: (card.metric?.delta || 0) > 0, negative: (card.metric?.delta || 0) < 0 }"
         >
-          {{ card.metric ? formatDelta(card.metric) : "当前总量" }}
+          {{ card.deltaText || (card.metric ? formatDelta(card.metric, card.suffix) : "当前总量") }}
         </div>
       </div>
     </div>
@@ -108,6 +159,10 @@ function formatDelta(metric?: AdminAnalyticsMetric) {
     box-shadow: 0 24px 42px rgba(236, 185, 88, 0.16);
     border-color: rgba(241, 210, 154, 0.92);
   }
+}
+
+.kpi-card-clickable {
+  cursor: pointer;
 }
 
 .kpi-head {

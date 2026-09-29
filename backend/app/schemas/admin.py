@@ -154,6 +154,9 @@ class AnalyticsSummaryOut(BaseModel):
     credits_consumed: AnalyticsMetricOut
     new_users: AnalyticsMetricOut
     active_users: AnalyticsMetricOut
+    fallback_task_total: int = 0
+    fallback_success_tasks: int = 0
+    fallback_failed_tasks: int = 0
 
 
 class AnalyticsTimeseriesPointOut(BaseModel):
@@ -182,12 +185,36 @@ class AnalyticsBreakdownItemOut(BaseModel):
     credit_cost: int = 0
 
 
+class AnalyticsModelCompareItemOut(BaseModel):
+    name: str
+    count: int = 0
+    success_count: int = 0
+    failed_count: int = 0
+    success_rate: float = 0
+    credit_cost: int = 0
+    avg_credit_cost: float = 0
+    duration_count: int = 0
+    avg_duration_seconds: float = 0
+
+
+class AnalyticsApiAttemptPerformanceItemOut(BaseModel):
+    api_config_id: int | None = None
+    name: str
+    call_count: int = 0
+    task_duration_count: int = 0
+    avg_task_duration_seconds: float = 0
+    download_count: int = 0
+    avg_result_download_ms: float = 0
+
+
 class AnalyticsBreakdownOut(BaseModel):
     range_label: str
     status_breakdown: list[AnalyticsBreakdownItemOut]
     source_breakdown: list[AnalyticsBreakdownItemOut]
     mode_breakdown: list[AnalyticsBreakdownItemOut]
     model_breakdown: list[AnalyticsBreakdownItemOut]
+    model_compare: list[AnalyticsModelCompareItemOut] = Field(default_factory=list)
+    api_attempt_performance: list[AnalyticsApiAttemptPerformanceItemOut] = Field(default_factory=list)
     top_users_by_tasks: list[AnalyticsBreakdownItemOut]
     top_users_by_credit: list[AnalyticsBreakdownItemOut]
 

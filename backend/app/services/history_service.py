@@ -22,6 +22,7 @@ from app.services.external_api_config_service import (
     resolve_scene_generation_configs,
 )
 from app.services.business_id_service import task_external_id, user_external_id
+from app.services.content_safety_service import build_exclude_content_safety_failed_task_clause
 from app.services.image_delivery_service import (
     get_optional_cos_config,
     serialize_asset_urls,
@@ -1073,6 +1074,7 @@ def get_all_history(
     mode: Optional[str] = None,
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
+    include_unsafe_tasks: bool = True,
 ):
     cos_config = get_optional_cos_config(db)
     scene_type_map = get_task_scene_type_map(db)
@@ -1117,6 +1119,8 @@ def get_all_history(
             reverse_query = reverse_query.filter(CreditLog.id.is_(None))
         if model != PROMPT_OPTIMIZE_MODEL:
             prompt_optimize_query = prompt_optimize_query.filter(PromptOptimizeTask.id.is_(None))
+    if not include_unsafe_tasks:
+        task_query = task_query.filter(build_exclude_content_safety_failed_task_clause(Task.status, Task.error_message))
     if mode:
         if mode == TASK_TYPE_PROMPT_REVERSE:
             task_query = task_query.filter(Task.id.is_(None))
