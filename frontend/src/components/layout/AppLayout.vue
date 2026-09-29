@@ -37,6 +37,7 @@ import {
 import { subscribeAuthSessionExpired } from "@/lib/authSessionNotice";
 import { APP_THEME_ATTRIBUTE, type AppThemeName } from "@/config/theme";
 import { getCurrentTheme } from "@/lib/theme";
+import NavGenerateImageIcon from "@/components/icons/NavGenerateImageIcon.vue";
 import type { AnnouncementConfig, PaymentPlan } from "@/types";
 import {
   PictureOutlined,
@@ -65,6 +66,8 @@ import {
   CheckOutlined,
   ShareAltOutlined,
   TagsOutlined,
+  BulbOutlined,
+  ClockCircleOutlined,
 } from "@ant-design/icons-vue";
 
 const router = useRouter();
@@ -130,13 +133,21 @@ const USER_UNREAD_SYSTEM_MESSAGE_NOTIFICATION_KEY = "global-user-unread-system-m
 const INVITE_CODE_SESSION_KEY = "800ai.personalInviteCode";
 const notifiedUnreadSystemMessageIdsByUser = new Map<string, Set<string>>();
 
-const primaryMenuItems = [
-  { key: "templates", label: "创意模版", iconSrc: withBaseUrl("nav-templates.svg"), darkIconSrc: withBaseUrl("nav-templates-mono.svg") },
-  { key: "generate", label: "AI 生图", iconSrc: withBaseUrl("nav-generate.svg") },
-  { key: "history", label: "历史图片", iconSrc: withBaseUrl("nav-history.svg"), darkIconSrc: withBaseUrl("nav-history-mono.svg") },
+type PrimaryMenuItem = {
+  key: string;
+  label: string;
+  iconSrc: string;
+  darkIconSrc?: string;
+  icon?: Component;
+};
+
+const primaryMenuItems: PrimaryMenuItem[] = [
+  { key: "templates", label: "创意模版", iconSrc: withBaseUrl("nav-templates.svg"), darkIconSrc: withBaseUrl("nav-templates-mono.svg"), icon: BulbOutlined },
+  { key: "generate", label: "AI 生图", iconSrc: withBaseUrl("nav-generate.svg"), icon: NavGenerateImageIcon },
+  { key: "history", label: "历史图片", iconSrc: withBaseUrl("nav-history.svg"), darkIconSrc: withBaseUrl("nav-history-mono.svg"), icon: ClockCircleOutlined },
 ];
 
-function getPrimaryMenuIconSrc(item: (typeof primaryMenuItems)[number]) {
+function getPrimaryMenuIconSrc(item: PrimaryMenuItem) {
   if (currentTheme.value !== "warm" && item.darkIconSrc) {
     return item.darkIconSrc;
   }
@@ -1188,7 +1199,8 @@ watch(purchaseDialogOpen, (open) => {
           @click="handleMenuClick"
         >
           <a-menu-item v-for="item in primaryMenuItems" :key="item.key">
-            <img :src="getPrimaryMenuIconSrc(item)" :alt="item.label" class="nav-menu-icon" />
+            <component v-if="item.icon" :is="item.icon" class="nav-menu-system-icon" />
+            <img v-else :src="getPrimaryMenuIconSrc(item)" :alt="item.label" class="nav-menu-icon" />
             <span>{{ item.label }}</span>
           </a-menu-item>
         </a-menu>
@@ -1307,7 +1319,8 @@ watch(purchaseDialogOpen, (open) => {
               :class="{ active: selectedKeys.includes(item.key) }"
               @click="handleMenuClick({ key: item.key })"
             >
-              <img :src="getPrimaryMenuIconSrc(item)" :alt="item.label" class="nav-menu-icon" />
+              <component v-if="item.icon" :is="item.icon" class="nav-menu-system-icon" />
+              <img v-else :src="getPrimaryMenuIconSrc(item)" :alt="item.label" class="nav-menu-icon" />
               <span>{{ item.label }}</span>
             </button>
             <template #overlay>
@@ -1331,7 +1344,8 @@ watch(purchaseDialogOpen, (open) => {
             :class="{ active: selectedKeys.includes(item.key) }"
             @click="handleMenuClick({ key: item.key })"
           >
-            <img :src="getPrimaryMenuIconSrc(item)" :alt="item.label" class="nav-menu-icon" />
+            <component v-if="item.icon" :is="item.icon" class="nav-menu-system-icon" />
+            <img v-else :src="getPrimaryMenuIconSrc(item)" :alt="item.label" class="nav-menu-icon" />
             <span>{{ item.label }}</span>
           </button>
         </template>
@@ -1545,7 +1559,10 @@ watch(purchaseDialogOpen, (open) => {
             @click="handleMenuClick"
           >
             <a-menu-item v-for="item in primaryMenuItems" :key="item.key">
-              <img :src="getPrimaryMenuIconSrc(item)" :alt="item.label" class="nav-menu-icon" />
+              <template #icon>
+                <component v-if="item.icon" :is="item.icon" class="nav-menu-system-icon" />
+                <img v-else :src="getPrimaryMenuIconSrc(item)" :alt="item.label" class="nav-menu-icon" />
+              </template>
               <span>{{ item.label }}</span>
             </a-menu-item>
           </a-menu>
@@ -2212,6 +2229,10 @@ watch(purchaseDialogOpen, (open) => {
     filter: var(--theme-nav-icon-active-filter);
   }
 
+  :deep(.ant-menu-item-selected .nav-menu-system-icon) {
+    filter: var(--theme-nav-icon-active-filter);
+  }
+
   :deep(.ant-menu-item:not(.ant-menu-item-selected):hover) {
     color: var(--theme-nav-hover-text) !important;
     background: var(--theme-nav-hover-bg) !important;
@@ -2230,6 +2251,20 @@ watch(purchaseDialogOpen, (open) => {
   display: block;
   flex-shrink: 0;
   filter: var(--theme-nav-icon-filter);
+  transition: filter var(--motion-duration-fast) var(--motion-ease-soft);
+}
+
+.nav-menu-system-icon {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  color: currentColor;
+  filter: var(--theme-nav-icon-filter);
+  font-size: 19px;
+  line-height: 1;
   transition: filter var(--motion-duration-fast) var(--motion-ease-soft);
 }
 
@@ -2334,6 +2369,19 @@ watch(purchaseDialogOpen, (open) => {
   width: 20px;
   height: 20px;
   color: currentColor;
+  filter: none;
+  font-size: 20px;
+}
+
+.canvas-side-nav-item .nav-menu-icon {
+  width: 20px;
+  height: 20px;
+}
+
+.canvas-side-nav-item .nav-menu-system-icon {
+  width: 20px;
+  height: 20px;
+  color: currentColor;
   font-size: 20px;
 }
 
@@ -2351,6 +2399,12 @@ watch(purchaseDialogOpen, (open) => {
 
 .canvas-side-nav-item.active .nav-menu-icon {
   filter: var(--theme-nav-icon-active-filter);
+}
+
+.canvas-side-nav-item.active :deep(.anticon),
+.canvas-side-nav-item.active .nav-menu-system-icon {
+  color: currentColor;
+  filter: none;
 }
 
 .canvas-side-nav-actions {
@@ -2624,6 +2678,10 @@ watch(purchaseDialogOpen, (open) => {
   }
 
   :deep(.ant-menu-item-selected .nav-menu-icon) {
+    filter: var(--theme-nav-icon-active-filter);
+  }
+
+  :deep(.ant-menu-item-selected .nav-menu-system-icon) {
     filter: var(--theme-nav-icon-active-filter);
   }
 

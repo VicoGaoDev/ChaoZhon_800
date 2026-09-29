@@ -913,14 +913,24 @@ def get_admin_history_cards(
         user.id: user
         for user in db.query(User).filter(User.id.in_(user_ids)).all()
     } if user_ids else {}
+    failed_task_ids = {
+        int(task.id)
+        for task in (
+            [image.task for image in images if image.task]
+            + list(tasks_without_images)
+        )
+        if task
+        and task.id
+        and task.status == "failed"
+        and int(task.credit_cost or 0) > 0
+    }
+    refunded_task_ids = _get_refunded_task_ids(db, list(failed_task_ids))
     items = []
     for image in images:
         task = image.task
         task_user = user_cache.get(task.user_id) if task else None
         task_credit_cost = int(task.credit_cost or 0) if task else 0
-        credit_refunded = False
-        if task and task.status == "failed" and task_credit_cost > 0:
-            credit_refunded = is_task_generation_failure_credit_refunded(db, task.id)
+        credit_refunded = bool(task and task.id and int(task.id) in refunded_task_ids)
         image_payload = serialize_image(image, cos_config=cos_config)
         source_asset = serialize_asset_urls(task.source_image or "", cos_config=cos_config)
         mask_asset = serialize_asset_urls(task.mask_image or "", cos_config=cos_config)
@@ -1018,9 +1028,7 @@ def get_admin_history_cards(
     for task in tasks_without_images:
         task_user = user_cache.get(task.user_id)
         task_credit_cost = int(task.credit_cost or 0)
-        credit_refunded = False
-        if task.status == "failed" and task_credit_cost > 0:
-            credit_refunded = is_task_generation_failure_credit_refunded(db, task.id)
+        credit_refunded = bool(task.id and int(task.id) in refunded_task_ids)
         source_asset = serialize_asset_urls(task.source_image or "", cos_config=cos_config)
         mask_asset = serialize_asset_urls(task.mask_image or "", cos_config=cos_config)
         reference_assets = [serialize_asset_urls(ref, cos_config=cos_config) for ref in _parse_refs(task.reference_images)]

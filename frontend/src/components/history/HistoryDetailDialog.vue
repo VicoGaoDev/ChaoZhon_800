@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { message } from "ant-design-vue";
 import { CloseOutlined, CopyOutlined, DownloadOutlined, LeftOutlined, PictureOutlined, ReloadOutlined, RightOutlined } from "@ant-design/icons-vue";
 import dayjs from "dayjs";
@@ -251,6 +251,11 @@ function closeDialog() {
   emit("update:open", false);
 }
 
+function getDetailItemIdentity(item: UserHistoryCard | null | undefined) {
+  if (!item) return "";
+  return String(item.display_id || item.task_id || item.history_id || item.image_id || item.created_at || "");
+}
+
 function navigatePrev() {
   if (!props.hasPrev) return;
   emit("navigate-prev");
@@ -278,6 +283,17 @@ function handleDetailKeydown(event: KeyboardEvent) {
   }
 }
 
+watch(
+  () => [props.open, getDetailItemIdentity(props.item)] as const,
+  ([open]) => {
+    previewVisible.value = false;
+    previewSrc.value = "";
+    if (typeof document === "undefined") return;
+    document.body.style.overflow = open ? "hidden" : "";
+  },
+  { immediate: true },
+);
+
 onMounted(() => {
   window.addEventListener("resize", updateViewportWidth);
   window.addEventListener("keydown", handleDetailKeydown);
@@ -286,6 +302,9 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener("resize", updateViewportWidth);
   window.removeEventListener("keydown", handleDetailKeydown);
+  if (typeof document !== "undefined") {
+    document.body.style.overflow = "";
+  }
 });
 
 function attemptStatusLabel(status: string) {
@@ -748,7 +767,7 @@ function handleDownload(item: UserHistoryCard) {
   top: 0;
   right: 0;
   bottom: 0;
-  z-index: 1200;
+  z-index: 1000;
   display: flex;
   flex-direction: column;
   background: var(--theme-panel-bg, #fffaf2);

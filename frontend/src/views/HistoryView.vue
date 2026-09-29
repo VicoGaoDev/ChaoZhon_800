@@ -134,6 +134,7 @@ const feedbackTarget = ref<UserHistoryCard | null>(null);
 const pinningKeys = ref<string[]>([]);
 const templateDialogRef = ref<InstanceType<typeof TemplateEditorDialog> | null>(null);
 const isAdminHistoryView = computed(() => props.adminUserTasks && auth.isAdmin);
+const isIncrementalHistoryView = computed(() => !isAdminHistoryView.value);
 const userInfoDialogOpen = ref(false);
 const selectedUserInfo = ref<AdminUser | null>(null);
 
@@ -320,23 +321,49 @@ async function fetchHistoryPage(targetPage: number) {
   return fetchHistory(targetPage, pageSize.value, getHistoryQuery());
 }
 
-async function loadHistory(silent = false) {
-  loading.value = true;
+function mergeRefreshedFirstPage(firstPageItems: UserHistoryCard[]) {
+  const firstPageKeys = new Set(firstPageItems.map((item) => String(getHistoryItemKey(item))));
+  const retainedItems = items.value
+    .slice(pageSize.value)
+    .filter((item) => !firstPageKeys.has(String(getHistoryItemKey(item))));
+  return [...firstPageItems, ...retainedItems];
+}
+
+async function loadHistory(
+  silent = false,
+  options: { rebuildLoadedPages?: boolean } = {},
+) {
+  if (!silent) loading.value = true;
   try {
-    const targetPages = Math.max(1, page.value);
-    const results = await Promise.all(
-      Array.from({ length: targetPages }, (_, index) => fetchHistoryPage(index + 1))
-    );
-    const mergedItems = results.flatMap((result) => result.items);
-    items.value = mergedItems;
-    total.value = results[0]?.total || 0;
-    syncSelection(mergedItems);
-    syncDetail(mergedItems);
+    const shouldRebuildLoadedPages = options.rebuildLoadedPages
+      ?? page.value > 1;
+
+    if (shouldRebuildLoadedPages) {
+      const targetPages = Math.max(1, page.value);
+      const results = await Promise.all(
+        Array.from({ length: targetPages }, (_, index) => fetchHistoryPage(index + 1))
+      );
+      const mergedItems = results.flatMap((result) => result.items);
+      items.value = mergedItems;
+      total.value = results[0]?.total || 0;
+      syncSelection(mergedItems);
+      syncDetail(mergedItems);
+      syncHistoryPolling();
+      return;
+    }
+
+    const firstPage = await fetchHistoryPage(1);
+    total.value = firstPage.total;
+    items.value = silent && isIncrementalHistoryView.value && page.value > 1
+      ? mergeRefreshedFirstPage(firstPage.items)
+      : firstPage.items;
+    syncSelection(items.value);
+    syncDetail(items.value);
     syncHistoryPolling();
   } catch {
     if (!silent) message.error("获取历史记录失败");
   } finally {
-    loading.value = false;
+    if (!silent) loading.value = false;
   }
 }
 

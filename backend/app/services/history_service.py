@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from sqlalchemy import and_, func, or_
-from sqlalchemy.orm import Session, lazyload, selectinload
+from sqlalchemy.orm import Session, lazyload, load_only, selectinload
 from app.models.credit_log import CreditLog
 from app.models.external_api_config import ExternalApiConfig
 from app.models.external_api_scene_binding import ExternalApiSceneBinding
@@ -1487,8 +1487,31 @@ def get_admin_history_cards(
             for task in (
                 db.query(Task)
                 .options(
+                    load_only(
+                        Task.id,
+                        Task.business_id,
+                        Task.user_id,
+                        Task.model,
+                        Task.source,
+                        Task.mode,
+                        Task.prompt,
+                        Task.num_images,
+                        Task.size,
+                        Task.resolution,
+                        Task.custom_size,
+                        Task.reference_images,
+                        Task.source_image,
+                        Task.mask_image,
+                        Task.credit_cost,
+                        Task.status,
+                        Task.error_message,
+                        Task.used_fallback_api,
+                        Task.is_deleted,
+                        Task.created_at,
+                        Task.request_started_at,
+                        Task.request_finished_at,
+                    ),
                     selectinload(Task.images),
-                    selectinload(Task.user),
                     lazyload(Task.api_attempts),
                 )
                 .filter(Task.id.in_(candidate_task_ids))
@@ -1556,15 +1579,25 @@ def get_admin_history_cards(
         user.id: user
         for user in db.query(User).filter(User.id.in_(user_ids)).all()
     } if user_ids else {}
+    failed_task_ids = {
+        int(task.id)
+        for task in (
+            [image.task for image in images if image.task]
+            + list(tasks_without_images)
+        )
+        if task
+        and task.id
+        and task.status == "failed"
+        and int(task.credit_cost or 0) > 0
+    }
+    refunded_task_ids = _get_refunded_task_ids(db, list(failed_task_ids))
 
     items = []
     for image in images:
         task = image.task
         task_user = user_cache.get(task.user_id) if task else None
         task_credit_cost = int(task.credit_cost or 0) if task else 0
-        credit_refunded = False
-        if task and task.status == "failed" and task_credit_cost > 0:
-            credit_refunded = is_task_generation_failure_credit_refunded(db, task.id)
+        credit_refunded = bool(task and task.id and int(task.id) in refunded_task_ids)
         image_payload = serialize_image(image, cos_config=cos_config)
         source_asset = serialize_asset_urls(task.source_image or "", cos_config=cos_config)
         mask_asset = serialize_asset_urls(task.mask_image or "", cos_config=cos_config)
@@ -1664,9 +1697,7 @@ def get_admin_history_cards(
     for task in tasks_without_images:
         task_user = user_cache.get(task.user_id)
         task_credit_cost = int(task.credit_cost or 0)
-        credit_refunded = False
-        if task.status == "failed" and task_credit_cost > 0:
-            credit_refunded = is_task_generation_failure_credit_refunded(db, task.id)
+        credit_refunded = bool(task.id and int(task.id) in refunded_task_ids)
         source_asset = serialize_asset_urls(task.source_image or "", cos_config=cos_config)
         mask_asset = serialize_asset_urls(task.mask_image or "", cos_config=cos_config)
         reference_assets = [serialize_asset_urls(ref, cos_config=cos_config) for ref in _parse_refs(task.reference_images)]

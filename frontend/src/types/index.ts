@@ -65,8 +65,18 @@ export interface TaskResult {
   custom_size?: string;
   credit_cost: number;
   credit_refunded?: boolean;
+  failure_refund_remaining_count?: number | null;
+  used_fallback_api?: boolean;
+  reference_images?: string[];
+  reference_image_thumbs?: string[];
+  source_image?: string;
+  source_image_thumb?: string;
+  mask_image?: string;
+  mask_image_thumb?: string;
+  api_attempts?: TaskApiAttempt[];
   status: "pending" | "queued" | "processing" | "success" | "failed";
   error_message?: string;
+  provider_error_message?: string;
   created_at: string;
   enqueued_at?: string | null;
   request_started_at?: string | null;

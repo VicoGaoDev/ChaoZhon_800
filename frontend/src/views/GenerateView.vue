@@ -18,6 +18,7 @@ import {
   AppstoreOutlined,
   BarChartOutlined,
   LoadingOutlined,
+  ExperimentOutlined,
   PlusOutlined,
   ExclamationCircleFilled,
   RedoOutlined,
@@ -26,6 +27,8 @@ import {
   DoubleLeftOutlined,
   DoubleRightOutlined,
   DownOutlined,
+  FilterOutlined,
+  CalendarOutlined,
   UndoOutlined,
   MessageOutlined,
   QuestionCircleOutlined,
@@ -57,6 +60,7 @@ import GenerateStyleTags from "@/components/generate/GenerateStyleTags.vue";
 import OptionGridPicker from "@/components/generate/OptionGridPicker.vue";
 import { type GenerateCameraSelection } from "@/lib/generateCameras";
 import { composeGeneratePrompt, parseGeneratePrompt } from "@/lib/generateStyles";
+import NavGenerateImageIcon from "@/components/icons/NavGenerateImageIcon.vue";
 import PromptInterceptionTip from "@/components/generate/PromptInterceptionTip.vue";
 import { withBaseUrl } from "@/lib/assets";
 import {
@@ -74,7 +78,7 @@ import {
   readStoredGridColumnCount,
   writeStoredGridColumnCount,
 } from "@/lib/gridColumnPreference";
-import type { GenerationModelOption, ImageResult, PublicPromptOptimizeStyle, SceneOptionItem, TaskResult, TaskSceneConfig, UserAsset, UserHistoryCard, UserPrompt } from "@/types";
+import type { GenerationModelOption, ImageResult, PublicPromptOptimizeStyle, SceneOptionItem, TaskApiAttempt, TaskResult, TaskSceneConfig, TaskSource, TaskType, UserAsset, UserHistoryCard, UserPrompt } from "@/types";
 
 const auth = useAuthStore();
 const router = useRouter();
@@ -87,6 +91,7 @@ const PromptOptimizeStyleDialog = defineAsyncComponent(() => import("@/component
 const UserAssetPicker = defineAsyncComponent(() => import("@/components/assets/UserAssetPicker.vue"));
 const UserPromptLibraryModal = defineAsyncComponent(() => import("@/components/prompts/UserPromptLibraryModal.vue"));
 const FeedbackDialog = defineAsyncComponent(() => import("@/components/feedback/FeedbackDialog.vue"));
+const HistoryDetailDialog = defineAsyncComponent(() => import("@/components/history/HistoryDetailDialog.vue"));
 const TemplateEditorDialog = defineAsyncComponent(() => import("@/components/templates/TemplateEditorDialog.vue"));
 const COMPLETED_UNREAD_FEEDBACK_NOTIFICATION_KEY = "user-completed-unread-feedback";
 
@@ -103,7 +108,10 @@ function showInsufficientCreditsPurchase(detail?: string) {
 }
 
 type GenerateMode = "textGenerate" | "imageEdit" | "inpaint" | "promptReverse";
-const MAX_RECENT_GENERATED_TASKS = 20;
+type GeneratedTaskStatusFilter = "pending" | "processing" | "success" | "failed";
+type GeneratedTaskDatePreset = "today" | "yesterday" | "week" | "custom";
+const GENERATED_TASK_HISTORY_PAGE_SIZE = 20;
+const GENERATED_TASK_RETENTION_DAYS = 15;
 const MAX_ACTIVE_GENERATION_IMAGES = 12;
 const GENERATION_IMAGE_COUNT_OPTIONS: SceneOptionItem[] = Array.from(
   { length: MAX_ACTIVE_GENERATION_IMAGES },
@@ -194,18 +202,44 @@ interface GeneratedTaskItem {
   resolution: string;
   customSize: string;
   referenceImages: string[];
+  referenceImageThumbs: string[];
   sourceImage?: string;
+  sourceImageThumb?: string;
   maskImage?: string;
+  maskImageThumb?: string;
   createdAt: string;
   status: GeneratedTaskStatus;
   errorMessage?: string;
+  providerErrorMessage?: string;
   creditRefunded?: boolean;
+  failureRefundRemainingCount?: number | null;
+  usedFallbackApi?: boolean;
+  apiAttempts?: TaskApiAttempt[];
   images: ImageResult[];
 }
 
 const generatedTasks = ref<GeneratedTaskItem[]>([]);
+const generatedTaskHistoryPage = ref(0);
+const generatedTaskHistoryTotal = ref(0);
+const generatedTasksLoading = ref(false);
+const generatedTasksLoadingMore = ref(false);
+const resultBodyRef = ref<HTMLElement | null>(null);
+const generatedTaskLoadMoreAnchor = ref<HTMLElement | null>(null);
+const generatedTaskFilterOpen = ref(false);
+const generatedTaskTypeFilter = ref<TaskType | undefined>(undefined);
+const generatedTaskSourceFilter = ref<TaskSource | undefined>(undefined);
+const generatedTaskModelFilter = ref<string | undefined>(undefined);
+const generatedTaskStatusFilter = ref<GeneratedTaskStatusFilter | undefined>(undefined);
+const generatedTaskPromptFilter = ref("");
+const generatedTaskDateRangeFilter = ref<[dayjs.Dayjs, dayjs.Dayjs] | null>(null);
+const generatedTaskDatePreset = ref<GeneratedTaskDatePreset | null>(null);
+const generatedTaskHideExpiredFilter = ref(true);
+const generatedTaskHideFailedFilter = ref(false);
 const taskPollTimer = ref<ReturnType<typeof setInterval> | null>(null);
 const taskPollingInFlight = ref(false);
+let generatedTaskLoadMoreObserver: IntersectionObserver | null = null;
+let generatedTaskLoadRequestId = 0;
+let generatedTaskFilterDebounceTimer: number | null = null;
 
 type UploadItemStatus = "uploading" | "success" | "failed";
 
@@ -273,6 +307,10 @@ const repaintCanvasRef = ref<{
 
 const previewVisible = ref(false);
 const previewCurrent = ref("");
+const detailOpen = ref(false);
+const detailItem = ref<UserHistoryCard | null>(null);
+const detailTaskLocalId = ref("");
+const detailImageIndex = ref(0);
 const feedbackDialogOpen = ref(false);
 const feedbackTarget = ref<{
   taskId: string;
@@ -389,7 +427,7 @@ const resultEmptyTitle = computed(() => (
 const resultEmptyDesc = computed(() => (
   generateMode.value === "promptReverse"
     ? "上传图片后点击「开始反推」，即可得到适合 AI 绘画的中文提示词"
-    : "在左侧设置提示词和参数后发起任务，右侧会展示最近 20 个生图任务结果"
+    : "在左侧设置提示词和参数后发起任务，右侧会展示全部生图任务结果"
 ));
 const referenceUrls = computed(() => (
   referenceItems.value
@@ -425,6 +463,29 @@ const generationModelSelectOptions = computed(() => (
     categorySortOrder: model.category_sort_order,
   }))
 ));
+const detailModelOptions = computed(() => (
+  taskScenes.value.map((scene) => ({
+    label: scene.scene_label,
+    value: scene.scene_key,
+  }))
+));
+const generatedTaskFilterModelOptions = computed(() => {
+  const optionMap = new Map<string, string>();
+  detailModelOptions.value.forEach((item) => optionMap.set(item.value, item.label));
+  return Array.from(optionMap.entries()).map(([value, label]) => ({ value, label }));
+});
+const generatedTaskActiveFilterCount = computed(() => {
+  let count = 0;
+  if (generatedTaskHideExpiredFilter.value) count += 1;
+  if (generatedTaskHideFailedFilter.value) count += 1;
+  if (generatedTaskTypeFilter.value) count += 1;
+  if (generatedTaskSourceFilter.value) count += 1;
+  if (generatedTaskModelFilter.value) count += 1;
+  if (generatedTaskStatusFilter.value) count += 1;
+  if (generatedTaskPromptFilter.value.trim()) count += 1;
+  if (generatedTaskDateRangeFilter.value) count += 1;
+  return count;
+});
 const hasBlockedUploads = computed(() => {
   if (generateMode.value === "inpaint") {
     return !!sourcePreviewUrl.value && !sourceImageUrl.value;
@@ -829,7 +890,10 @@ type GenerateTaskPayload = {
   mask_image?: string;
 };
 
-type GeneratedTaskDraft = Omit<GeneratedTaskItem, "localId" | "taskId" | "createdAt" | "status" | "images">;
+type GeneratedTaskDraft = Omit<
+  GeneratedTaskItem,
+  "localId" | "taskId" | "createdAt" | "status" | "errorMessage" | "providerErrorMessage" | "creditRefunded" | "failureRefundRemainingCount" | "usedFallbackApi" | "apiAttempts" | "images"
+>;
 
 function createPendingImages(count: number) {
   return Array.from({ length: count }, (_, index) => ({
@@ -988,19 +1052,23 @@ function createLocalGeneratedTask(taskDraft: GeneratedTaskDraft): GeneratedTaskI
     createdAt: new Date().toISOString(),
     status: "submitting",
     errorMessage: "",
+    providerErrorMessage: "",
     creditRefunded: false,
+    failureRefundRemainingCount: null,
+    usedFallbackApi: false,
+    apiAttempts: [],
     images: createPendingImages(1),
   };
-}
-
-function limitGeneratedTasks(tasks: GeneratedTaskItem[]) {
-  return tasks.slice(0, MAX_RECENT_GENERATED_TASKS);
 }
 
 function isGeneratedTaskExpired(task: Pick<GeneratedTaskItem, "createdAt" | "status">) {
   if (task.status !== "success") return false;
   if (!task.createdAt) return false;
-  return dayjs().diff(dayjs(task.createdAt), "day", true) >= 15;
+  return dayjs().diff(dayjs(task.createdAt), "day", true) >= GENERATED_TASK_RETENTION_DAYS;
+}
+
+function getGeneratedTaskRetentionStart() {
+  return dayjs().subtract(GENERATED_TASK_RETENTION_DAYS, "day");
 }
 
 const resultItems = computed(() => (
@@ -1010,7 +1078,16 @@ const resultItems = computed(() => (
     task,
     image: img,
     index,
-  })))
+  }))).filter((item) => {
+    if (!generatedTaskHideFailedFilter.value) return true;
+    return item.task.status !== "failed" && item.image.status !== "failed";
+  })
+));
+
+const hasMoreGeneratedTasks = computed(() => (
+  auth.isLoggedIn
+  && generatedTaskHistoryPage.value > 0
+  && generatedTaskHistoryPage.value * GENERATED_TASK_HISTORY_PAGE_SIZE < generatedTaskHistoryTotal.value
 ));
 
 const resultColumnCount = computed(() => {
@@ -1030,6 +1107,20 @@ watch(preferredResultColumnCount, (count) => {
 
 watch(resultCardAspectRatio, (value) => {
   writeStoredResultCardAspectRatio(value);
+});
+
+watch(generatedTasks, (tasks) => {
+  if (!detailOpen.value || !detailTaskLocalId.value) return;
+  const latest = tasks.find((task) => (
+    task.localId === detailTaskLocalId.value
+    || (!!detailItem.value?.task_id && task.taskId === detailItem.value.task_id)
+  ));
+  if (!latest) return;
+  const focusedImageId = detailItem.value?.image_id;
+  const focusedImage = typeof focusedImageId === "number"
+    ? latest.images.find((image) => image.id === focusedImageId)
+    : undefined;
+  detailItem.value = convertGeneratedTaskToHistoryCard(latest, focusedImage);
 });
 
 watch(isDesktopGenerateLayout, (desktop) => {
@@ -1096,13 +1187,27 @@ function syncTaskFromResult(taskId: string, data: TaskResult) {
     ...task,
     status: data.status,
     errorMessage: nextErrorMessage,
+    providerErrorMessage: data.provider_error_message || task.providerErrorMessage,
     creditRefunded: Boolean(data.credit_refunded),
+    failureRefundRemainingCount: data.failure_refund_remaining_count ?? task.failureRefundRemainingCount ?? null,
+    usedFallbackApi: Boolean(data.used_fallback_api),
+    apiAttempts: Array.isArray(data.api_attempts) ? data.api_attempts : (task.apiAttempts || []),
     createdAt: data.created_at || task.createdAt,
     model: data.model || task.model,
     size: data.size || task.size,
     resolution: data.resolution || task.resolution,
     customSize: data.custom_size || task.customSize,
     numImages: data.num_images || task.numImages,
+    referenceImages: Array.isArray(data.reference_images) && data.reference_images.length
+      ? data.reference_images
+      : task.referenceImages,
+    referenceImageThumbs: Array.isArray(data.reference_image_thumbs) && data.reference_image_thumbs.length
+      ? data.reference_image_thumbs
+      : task.referenceImageThumbs,
+    sourceImage: data.source_image || task.sourceImage,
+    sourceImageThumb: data.source_image_thumb || task.sourceImageThumb,
+    maskImage: data.mask_image || task.maskImage,
+    maskImageThumb: data.mask_image_thumb || task.maskImageThumb,
     images: data.images.length ? data.images : task.images,
   }));
   if (previousStatus !== data.status && (data.status === "success" || data.status === "failed")) {
@@ -1147,18 +1252,32 @@ function convertHistoryCardToGeneratedTask(item: UserHistoryCard): GeneratedTask
     resolution: item.resolution || "2K",
     customSize: item.custom_size || "",
     referenceImages: Array.isArray(item.reference_images) ? item.reference_images : [],
+    referenceImageThumbs: Array.isArray(item.reference_image_thumbs) && item.reference_image_thumbs.length
+      ? item.reference_image_thumbs
+      : (Array.isArray(item.reference_images) ? item.reference_images : []),
     sourceImage: item.source_image || undefined,
+    sourceImageThumb: item.source_image_thumb || item.source_image || undefined,
     maskImage: item.mask_image || undefined,
+    maskImageThumb: item.mask_image_thumb || item.mask_image || undefined,
     createdAt: item.created_at,
     status: item.status as GeneratedTaskStatus,
     errorMessage: item.error_message || item.images.find((image) => image.status === "failed" && image.error_message)?.error_message || "",
+    providerErrorMessage: "",
     creditRefunded: Boolean(item.credit_refunded),
+    failureRefundRemainingCount: null,
+    usedFallbackApi: Boolean(item.used_fallback_api),
+    apiAttempts: item.api_attempts || [],
     images: item.images.length ? item.images : createPendingImages(fallbackImageCount),
   };
 }
 
 function getGeneratedTaskFailureMessage(task: GeneratedTaskItem, image: ImageResult) {
-  return getPreferredGenerationErrorMessage(task.errorMessage, image.error_message, Boolean(task.creditRefunded), "生成失败，请重试");
+  return getPreferredGenerationErrorMessage(
+    task.errorMessage,
+    image.error_message,
+    Boolean(task.creditRefunded),
+    "生成失败，请重试",
+  );
 }
 
 function isGeneratedResultFailed(task: GeneratedTaskItem, image: ImageResult) {
@@ -1169,54 +1288,224 @@ function canRemoveGeneratedResult(task: GeneratedTaskItem, image: ImageResult) {
   return image.status === "success" || isGeneratedResultFailed(task, image);
 }
 
+function reloadGeneratedTasksForFilters() {
+  if (!auth.isLoggedIn) return;
+  stopAllTaskPolling();
+  void loadRecentGeneratedTasks();
+}
+
+function scheduleGeneratedTaskFilterReload() {
+  if (generatedTaskFilterDebounceTimer) {
+    window.clearTimeout(generatedTaskFilterDebounceTimer);
+    generatedTaskFilterDebounceTimer = null;
+  }
+  generatedTaskFilterDebounceTimer = window.setTimeout(() => {
+    generatedTaskFilterDebounceTimer = null;
+    reloadGeneratedTasksForFilters();
+  }, 320);
+}
+
+function setGeneratedTaskDatePreset(preset: GeneratedTaskDatePreset) {
+  generatedTaskDatePreset.value = preset;
+  const now = dayjs();
+  if (preset === "today") {
+    generatedTaskDateRangeFilter.value = [now, now];
+    return;
+  }
+  if (preset === "yesterday") {
+    const yesterday = now.subtract(1, "day");
+    generatedTaskDateRangeFilter.value = [yesterday, yesterday];
+    return;
+  }
+  if (preset === "week") {
+    generatedTaskDateRangeFilter.value = [now.subtract(6, "day"), now];
+  }
+}
+
+function handleGeneratedTaskCustomDateChange(value: [dayjs.Dayjs, dayjs.Dayjs] | null) {
+  generatedTaskDatePreset.value = value ? "custom" : null;
+}
+
+function resetGeneratedTaskFilters() {
+  generatedTaskHideExpiredFilter.value = true;
+  generatedTaskHideFailedFilter.value = false;
+  generatedTaskTypeFilter.value = undefined;
+  generatedTaskSourceFilter.value = undefined;
+  generatedTaskModelFilter.value = undefined;
+  generatedTaskStatusFilter.value = undefined;
+  generatedTaskPromptFilter.value = "";
+  generatedTaskDateRangeFilter.value = null;
+  generatedTaskDatePreset.value = null;
+}
+
+function resetGeneratedTaskPagination() {
+  generatedTaskHistoryPage.value = 0;
+  generatedTaskHistoryTotal.value = 0;
+  generatedTasksLoadingMore.value = false;
+}
+
+function getGeneratedTaskIdentity(task: GeneratedTaskItem) {
+  return task.taskId ? `task:${task.taskId}` : `local:${task.localId}`;
+}
+
+function setupGeneratedTaskLoadMoreObserver(target: HTMLElement | null) {
+  generatedTaskLoadMoreObserver?.disconnect();
+  generatedTaskLoadMoreObserver = null;
+  if (!target || !isDesktopGenerateLayout.value) return;
+
+  generatedTaskLoadMoreObserver = new IntersectionObserver(
+    (entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) void loadMoreGeneratedTasks();
+    },
+    { root: resultBodyRef.value, rootMargin: "0px 0px 260px 0px", threshold: 0.01 }
+  );
+  generatedTaskLoadMoreObserver.observe(target);
+}
+
+function handleGeneratedTaskResultScroll(event: Event) {
+  if (!isDesktopGenerateLayout.value) return;
+  const target = event.currentTarget as HTMLElement | null;
+  maybeLoadMoreGeneratedTasksNearBottom(target);
+}
+
+function maybeLoadMoreGeneratedTasksNearBottom(target = resultBodyRef.value) {
+  if (!isDesktopGenerateLayout.value) return;
+  if (!target || !hasMoreGeneratedTasks.value) return;
+  if (generatedTasksLoading.value || generatedTasksLoadingMore.value) return;
+  const distanceToBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
+  if (distanceToBottom <= 320) void loadMoreGeneratedTasks();
+}
+
+function getGeneratedTaskHistoryFilters() {
+  const dateRange = generatedTaskDateRangeFilter.value;
+  let startDate = dateRange?.[0]?.startOf("day") ?? null;
+  const endDate = dateRange?.[1]?.endOf("day") ?? null;
+
+  if (generatedTaskHideExpiredFilter.value) {
+    const retentionStart = getGeneratedTaskRetentionStart();
+    startDate = !startDate || startDate.isBefore(retentionStart) ? retentionStart : startDate;
+  }
+
+  return {
+    respect_pins: false,
+    include_prompt_reverse: false,
+    mode: generatedTaskTypeFilter.value,
+    source: generatedTaskSourceFilter.value,
+    model: generatedTaskModelFilter.value,
+    status: generatedTaskStatusFilter.value,
+    prompt: generatedTaskPromptFilter.value.trim() || undefined,
+    start_date: startDate?.toISOString(),
+    end_date: endDate?.toISOString(),
+  };
+}
+
 async function loadRecentGeneratedTasks() {
   if (!auth.isLoggedIn) {
     generatedTasks.value = [];
+    resetGeneratedTaskPagination();
+    stopAllTaskPolling();
+    return;
+  }
+
+  const requestId = ++generatedTaskLoadRequestId;
+  generatedTasksLoading.value = true;
+  resetGeneratedTaskPagination();
+
+  try {
+    await loadGeneratedTaskHistoryPages({ reset: true, requestId });
+  } catch {
+    stopAllTaskPolling();
+  } finally {
+    if (requestId === generatedTaskLoadRequestId) {
+      generatedTasksLoading.value = false;
+      void nextTick(() => maybeLoadMoreGeneratedTasksNearBottom());
+    }
+  }
+}
+
+async function loadMoreGeneratedTasks() {
+  if (!auth.isLoggedIn || generatedTasksLoading.value || generatedTasksLoadingMore.value || !hasMoreGeneratedTasks.value) return;
+  const requestId = generatedTaskLoadRequestId;
+  let loadedMoreSuccessfully = false;
+  generatedTasksLoadingMore.value = true;
+  try {
+    await loadGeneratedTaskHistoryPages({ reset: false, requestId });
+    loadedMoreSuccessfully = true;
+  } catch {
+    message.error("加载更多生成任务失败");
+  } finally {
+    if (requestId === generatedTaskLoadRequestId) {
+      generatedTasksLoadingMore.value = false;
+      if (loadedMoreSuccessfully) void nextTick(() => maybeLoadMoreGeneratedTasksNearBottom());
+    }
+  }
+}
+
+async function loadGeneratedTaskHistoryPages({
+  reset,
+  requestId,
+}: {
+  reset: boolean;
+  requestId: number;
+}) {
+  const seenTaskIds = new Set(
+    reset
+      ? []
+      : generatedTasks.value
+          .map((task) => task.taskId)
+          .filter((taskId): taskId is string => Boolean(taskId))
+  );
+  const loadedTasks: GeneratedTaskItem[] = [];
+  let nextPage = reset ? 1 : generatedTaskHistoryPage.value + 1;
+  let total = reset ? Infinity : generatedTaskHistoryTotal.value;
+  let lastLoadedPage = generatedTaskHistoryPage.value;
+
+  if (total !== Infinity && (nextPage - 1) * GENERATED_TASK_HISTORY_PAGE_SIZE >= total) return;
+
+  const res = await fetchHistory(nextPage, GENERATED_TASK_HISTORY_PAGE_SIZE, getGeneratedTaskHistoryFilters());
+  if (requestId !== generatedTaskLoadRequestId) return;
+
+  total = res.total;
+  lastLoadedPage = nextPage;
+
+  res.items.forEach((item) => {
+    if (item.mode === "promptReverse" || !item.task_id || seenTaskIds.has(item.task_id)) return;
+    seenTaskIds.add(item.task_id);
+    loadedTasks.push(convertHistoryCardToGeneratedTask(item));
+  });
+
+  generatedTaskHistoryPage.value = lastLoadedPage;
+  generatedTaskHistoryTotal.value = total === Infinity ? 0 : total;
+  const preserveInFlightTasks = reset
+    ? generatedTasks.value.filter((task) => {
+      if (task.status === "submitting" && !task.taskId) return true;
+      if (!task.taskId || seenTaskIds.has(task.taskId)) return false;
+      return task.status === "submitting"
+        || task.status === "pending"
+        || task.status === "queued"
+        || task.status === "processing";
+    })
+    : [];
+  generatedTasks.value = reset
+    ? [...preserveInFlightTasks, ...loadedTasks]
+    : [
+        ...generatedTasks.value,
+        ...loadedTasks.filter((task) => {
+          const taskIdentity = getGeneratedTaskIdentity(task);
+          return !generatedTasks.value.some((current) => getGeneratedTaskIdentity(current) === taskIdentity);
+        }),
+      ];
+
+  if (!activePollingTaskIds.value.length) {
     stopAllTaskPolling();
     return;
   }
 
   try {
-    const seenTaskIds = new Set<string>();
-    const recentHistoryItems: UserHistoryCard[] = [];
-    let page = 1;
-    let total = Infinity;
-
-    while (recentHistoryItems.length < total && seenTaskIds.size < MAX_RECENT_GENERATED_TASKS) {
-      const res = await fetchHistory(page, MAX_RECENT_GENERATED_TASKS, {
-        respect_pins: false,
-        include_prompt_reverse: false,
-      });
-      total = res.total;
-      if (!res.items.length) break;
-
-      res.items.forEach((item) => {
-        if (item.mode === "promptReverse" || !item.task_id || seenTaskIds.has(item.task_id)) return;
-        seenTaskIds.add(item.task_id);
-        recentHistoryItems.push(item);
-      });
-      page += 1;
-    }
-
-    const recentTasks = recentHistoryItems
-      .slice(0, MAX_RECENT_GENERATED_TASKS)
-      .map(convertHistoryCardToGeneratedTask);
-
-    generatedTasks.value = limitGeneratedTasks(recentTasks);
-
-    if (!activePollingTaskIds.value.length) {
-      stopAllTaskPolling();
-      return;
-    }
-
-    try {
-      const items = await refreshTasks(activePollingTaskIds.value);
-      if (items.some((item) => item.status !== "success" && item.status !== "failed")) startTaskPolling();
-    } catch {
-      startTaskPolling();
-    }
+    const items = await refreshTasks(activePollingTaskIds.value);
+    if (items.some((item) => item.status !== "success" && item.status !== "failed")) startTaskPolling();
   } catch {
-    stopAllTaskPolling();
+    startTaskPolling();
   }
 }
 
@@ -1251,7 +1540,7 @@ async function submitGeneratedTask(
   const taskCount = Math.max(1, payload.num_images);
   const localTasks = Array.from({ length: taskCount }, () => createLocalGeneratedTask(taskDraft));
   const localTaskIds = new Set(localTasks.map((task) => task.localId));
-  generatedTasks.value = limitGeneratedTasks([...localTasks, ...generatedTasks.value]);
+  generatedTasks.value = [...localTasks, ...generatedTasks.value];
 
   try {
     const res = await createTask(payload);
@@ -2175,8 +2464,11 @@ async function handleGenerate() {
       resolution: payload.resolution,
       customSize: payload.custom_size || "",
       referenceImages: payload.reference_images ? [...payload.reference_images] : [],
+      referenceImageThumbs: payload.reference_images ? [...payload.reference_images] : [],
       sourceImage: payload.source_image,
+      sourceImageThumb: payload.source_image,
       maskImage: payload.mask_image,
+      maskImageThumb: payload.mask_image,
     });
   } catch (err: any) {
     const detail = err.response?.data?.detail || "";
@@ -2294,8 +2586,11 @@ async function handleRegenerate(task: GeneratedTaskItem) {
       resolution: task.resolution,
       customSize: task.customSize,
       referenceImages: [...task.referenceImages],
+      referenceImageThumbs: task.referenceImageThumbs.length ? [...task.referenceImageThumbs] : [...task.referenceImages],
       sourceImage: task.sourceImage,
+      sourceImageThumb: task.sourceImageThumb || task.sourceImage,
       maskImage: task.maskImage,
+      maskImageThumb: task.maskImageThumb || task.maskImage,
     });
     message.success("已发起新的生图任务");
   } catch (err: any) {
@@ -2306,6 +2601,104 @@ async function handleRegenerate(task: GeneratedTaskItem) {
     }
     message.error(formatGenerationErrorMessage(detail, "重新生成失败"));
   }
+}
+
+function convertGeneratedTaskToHistoryCard(task: GeneratedTaskItem, focusedImage?: ImageResult): UserHistoryCard {
+  const primaryImage = focusedImage
+    || task.images.find((image) => image.status === "success")
+    || task.images[0];
+  const taskType = task.mode === "inpaint"
+    ? "inpaint"
+    : task.referenceImages.length
+      ? "image_edit"
+      : "text_generate";
+  const status = task.status === "submitting" ? "pending" : task.status;
+
+  return {
+    item_type: "task",
+    display_id: task.taskId || task.localId,
+    task_id: task.taskId,
+    image_id: typeof primaryImage?.id === "number" && primaryImage.id > 0 ? primaryImage.id : null,
+    is_pinned: false,
+    image_url: primaryImage?.image_url || "",
+    preview_url: primaryImage?.preview_url,
+    thumb_url: primaryImage?.thumb_url,
+    status,
+    image_format: primaryImage?.image_format,
+    image_size_bytes: primaryImage?.image_size_bytes,
+    task_type: taskType,
+    model: task.model || "",
+    source: "web",
+    mode: task.mode === "inpaint" ? "inpaint" : "generate",
+    prompt: task.prompt || "",
+    reference_images: [...task.referenceImages],
+    reference_image_thumbs: task.referenceImageThumbs.length ? [...task.referenceImageThumbs] : [...task.referenceImages],
+    source_image: task.sourceImage || "",
+    source_image_thumb: task.sourceImageThumb || task.sourceImage || "",
+    mask_image: task.maskImage || "",
+    mask_image_thumb: task.maskImageThumb || task.maskImage || "",
+    num_images: task.numImages,
+    size: task.size || "",
+    resolution: task.resolution || "",
+    custom_size: task.customSize || "",
+    credit_cost: getTaskDraftCreditCost(task),
+    credit_refunded: Boolean(task.creditRefunded),
+    used_fallback_api: Boolean(task.usedFallbackApi),
+    created_at: task.createdAt,
+    error_message: task.errorMessage || "",
+    images: task.images.length ? task.images : [],
+    api_attempts: task.apiAttempts || [],
+  };
+}
+
+function openGeneratedTaskDetail(task: GeneratedTaskItem, focusedImage?: ImageResult) {
+  detailTaskLocalId.value = task.localId;
+  const focusedIndex = focusedImage
+    ? task.images.findIndex((image) => (
+      image === focusedImage
+      || (typeof image.id === "number" && image.id > 0 && image.id === focusedImage.id)
+    ))
+    : 0;
+  detailImageIndex.value = focusedIndex >= 0 ? focusedIndex : 0;
+  detailItem.value = convertGeneratedTaskToHistoryCard(task, focusedImage);
+  detailOpen.value = true;
+}
+
+const detailResultIndex = computed(() => {
+  if (!detailOpen.value || !detailTaskLocalId.value) return -1;
+  return resultItems.value.findIndex((item) => (
+    item.taskLocalId === detailTaskLocalId.value
+    && item.index === detailImageIndex.value
+  ));
+});
+
+const hasDetailPrev = computed(() => detailResultIndex.value > 0);
+const hasDetailNext = computed(() => (
+  detailResultIndex.value >= 0
+  && detailResultIndex.value < resultItems.value.length - 1
+));
+
+function navigateGeneratedTaskDetail(delta: -1 | 1) {
+  const nextIndex = detailResultIndex.value + delta;
+  const nextItem = resultItems.value[nextIndex];
+  if (!nextItem) return;
+  openGeneratedTaskDetail(nextItem.task, nextItem.image);
+}
+
+function handleDetailReedit(item: UserHistoryCard) {
+  const task = generatedTasks.value.find((entry) => (
+    entry.localId === detailTaskLocalId.value
+    || (!!item.task_id && entry.taskId === item.task_id)
+  ));
+  detailOpen.value = false;
+  if (task) {
+    handleReeditTask(task);
+  }
+}
+
+function handleDetailDownload(item: UserHistoryCard) {
+  if (typeof item.image_id !== "number" || !item.image_url) return;
+  handleDownload(item.image_id, item.image_url, item.preview_url);
 }
 
 function handlePreview(url: string) {
@@ -2625,6 +3018,12 @@ onActivated(() => {
 
 onBeforeUnmount(() => {
   stopAllTaskPolling();
+  generatedTaskLoadMoreObserver?.disconnect();
+  generatedTaskLoadMoreObserver = null;
+  if (generatedTaskFilterDebounceTimer) {
+    window.clearTimeout(generatedTaskFilterDebounceTimer);
+    generatedTaskFilterDebounceTimer = null;
+  }
   window.removeEventListener("resize", syncViewportWidth);
   window.removeEventListener("paste", handleReferencePaste);
   window.removeEventListener(GENERATE_MENU_ENTRY_EVENT, handleGenerateMenuEntry);
@@ -2669,12 +3068,35 @@ watch(
   { immediate: true },
 );
 
+watch(generatedTaskLoadMoreAnchor, (target) => {
+  setupGeneratedTaskLoadMoreObserver(target);
+});
+
+watch(
+  [
+    generatedTaskHideExpiredFilter,
+    generatedTaskTypeFilter,
+    generatedTaskSourceFilter,
+    generatedTaskModelFilter,
+    generatedTaskStatusFilter,
+    generatedTaskDateRangeFilter,
+  ],
+  () => {
+    scheduleGeneratedTaskFilterReload();
+  },
+);
+
+watch(generatedTaskPromptFilter, () => {
+  scheduleGeneratedTaskFilterReload();
+});
+
 watch(() => auth.isLoggedIn, (isLoggedIn) => {
   if (isLoggedIn) {
     void loadRecentGeneratedTasks();
     return;
   }
   generatedTasks.value = [];
+  resetGeneratedTaskPagination();
   stopAllTaskPolling();
 });
 </script>
@@ -2706,7 +3128,7 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
                   @click="generateMode = 'imageEdit'"
                 >
                   <span class="generate-tab-label">
-                    <PictureOutlined />
+                    <NavGenerateImageIcon />
                     <span>图编辑</span>
                   </span>
                 </button>
@@ -2889,9 +3311,11 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
 
               <div class="prompt-block config-section">
                 <div class="prompt-label-row">
-                  <label>提示词</label>
-                  <div class="prompt-label-actions">
+                  <div class="prompt-label-main">
+                    <label>提示词</label>
                     <PromptInterceptionTip />
+                  </div>
+                  <div class="prompt-label-actions">
                     <GenerateCameraPicker
                       v-model:body-id="selectedCameraBodyId"
                       v-model:lens-id="selectedCameraLensId"
@@ -2903,14 +3327,22 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
                       v-model:lighting-style-id="selectedLightingStyleId"
                     />
                     <a-tooltip :title="PROMPT_OPTIMIZE_TOOLTIP">
-                      <span>
-                        <a-button type="text" class="prompt-library-btn" :loading="promptOptimizeLoading" @click="handlePromptOptimize">
-                          <template #icon><ThunderboltOutlined /></template>
-                          提示词优化
-                        </a-button>
-                      </span>
+                      <button
+                        type="button"
+                        class="prompt-icon-btn"
+                        aria-label="提示词优化"
+                        :disabled="promptOptimizeLoading"
+                        @click="handlePromptOptimize"
+                      >
+                        <LoadingOutlined v-if="promptOptimizeLoading" />
+                        <ExperimentOutlined v-else />
+                      </button>
                     </a-tooltip>
-                    <a-button type="text" class="prompt-library-btn" @click="openPromptLibrary">提示词库</a-button>
+                    <a-tooltip title="我的提示词">
+                      <button type="button" class="prompt-icon-btn" aria-label="我的提示词" @click="openPromptLibrary">
+                        <FontSizeOutlined />
+                      </button>
+                    </a-tooltip>
                   </div>
                 </div>
                 <div
@@ -3206,10 +3638,16 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
                 :class="{ 'is-reference-drag-over': referenceDragActive }"
               >
                 <div class="panel-head">
-                  <h3>参考图</h3>
+                  <div class="panel-head-main">
+                    <h3>参考图</h3>
+                    <span class="panel-hint">(最多 {{ maxReferenceImages }} 张<span class="panel-hint-extra">，支持拖拽、粘贴上传</span>)</span>
+                  </div>
                   <div class="panel-head-actions">
-                    <span class="panel-hint">(最多 {{ maxReferenceImages }} 张，支持拖拽、粘贴上传)</span>
-                    <a-button type="text" size="small" class="asset-library-btn" @click.stop="openAssetPicker">素材库</a-button>
+                    <a-tooltip title="我的素材">
+                      <button type="button" class="prompt-icon-btn" aria-label="我的素材" @click.stop="openAssetPicker">
+                        <NavGenerateImageIcon />
+                      </button>
+                    </a-tooltip>
                   </div>
                 </div>
 
@@ -3281,9 +3719,11 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
 
               <div class="prompt-block config-section">
                 <div class="prompt-label-row">
-                  <label>提示词</label>
-                  <div class="prompt-label-actions">
+                  <div class="prompt-label-main">
+                    <label>提示词</label>
                     <PromptInterceptionTip />
+                  </div>
+                  <div class="prompt-label-actions">
                     <GenerateCameraPicker
                       v-model:body-id="selectedCameraBodyId"
                       v-model:lens-id="selectedCameraLensId"
@@ -3295,14 +3735,22 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
                       v-model:lighting-style-id="selectedLightingStyleId"
                     />
                     <a-tooltip :title="PROMPT_OPTIMIZE_TOOLTIP">
-                      <span>
-                        <a-button type="text" class="prompt-library-btn" :loading="promptOptimizeLoading" @click="handlePromptOptimize">
-                          <template #icon><ThunderboltOutlined /></template>
-                          提示词优化
-                        </a-button>
-                      </span>
+                      <button
+                        type="button"
+                        class="prompt-icon-btn"
+                        aria-label="提示词优化"
+                        :disabled="promptOptimizeLoading"
+                        @click="handlePromptOptimize"
+                      >
+                        <LoadingOutlined v-if="promptOptimizeLoading" />
+                        <ExperimentOutlined v-else />
+                      </button>
                     </a-tooltip>
-                    <a-button type="text" class="prompt-library-btn" @click="openPromptLibrary">提示词库</a-button>
+                    <a-tooltip title="我的提示词">
+                      <button type="button" class="prompt-icon-btn" aria-label="我的提示词" @click="openPromptLibrary">
+                        <FontSizeOutlined />
+                      </button>
+                    </a-tooltip>
                   </div>
                 </div>
                 <div
@@ -3736,7 +4184,10 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
 
               <div class="prompt-block inpaint-prompt-block">
                 <div class="prompt-label-row">
-                  <label>提示词</label>
+                  <div class="prompt-label-main">
+                    <label>提示词</label>
+                    <PromptInterceptionTip />
+                  </div>
                   <div class="prompt-label-actions">
                     <GenerateCameraPicker
                       v-model:body-id="selectedCameraBodyId"
@@ -3749,14 +4200,22 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
                       v-model:lighting-style-id="selectedLightingStyleId"
                     />
                     <a-tooltip :title="PROMPT_OPTIMIZE_TOOLTIP">
-                      <span>
-                        <a-button type="text" class="prompt-library-btn" :loading="promptOptimizeLoading" @click="handlePromptOptimize">
-                          <template #icon><ThunderboltOutlined /></template>
-                          提示词优化
-                        </a-button>
-                      </span>
+                      <button
+                        type="button"
+                        class="prompt-icon-btn"
+                        aria-label="提示词优化"
+                        :disabled="promptOptimizeLoading"
+                        @click="handlePromptOptimize"
+                      >
+                        <LoadingOutlined v-if="promptOptimizeLoading" />
+                        <ExperimentOutlined v-else />
+                      </button>
                     </a-tooltip>
-                    <a-button type="text" class="prompt-library-btn" @click="openPromptLibrary">提示词库</a-button>
+                    <a-tooltip title="我的提示词">
+                      <button type="button" class="prompt-icon-btn" aria-label="我的提示词" @click="openPromptLibrary">
+                        <FontSizeOutlined />
+                      </button>
+                    </a-tooltip>
                   </div>
                 </div>
                 <div
@@ -3834,9 +4293,7 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
             </a-tooltip>
             <div class="result-tips">
               <div class="result-tip-line">
-                每日前 10 次失败任务不扣积分，所有任务可在
-                <router-link to="/history" class="result-tip-link">历史图片</router-link>
-                中查看
+                每日前 10 次失败任务不扣积分
               </div>
             </div>
           </div>
@@ -3846,6 +4303,7 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
               trigger="click"
               placement="bottomRight"
               overlay-class-name="generate-view-popover"
+              :get-popup-container="getBodyPopupContainer"
             >
               <a-tooltip title="视图设置">
                 <button
@@ -3889,6 +4347,154 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
                 </div>
               </template>
             </a-popover>
+            <a-popover
+              v-model:open="generatedTaskFilterOpen"
+              trigger="click"
+              placement="bottomRight"
+              overlay-class-name="generate-filter-popover"
+              :get-popup-container="getBodyPopupContainer"
+            >
+              <a-tooltip title="筛选任务">
+                <button
+                  type="button"
+                  class="result-filter-trigger"
+                  :class="{ active: generatedTaskActiveFilterCount > 0 }"
+                  aria-label="打开任务筛选"
+                >
+                  <FilterOutlined />
+                  <span v-if="generatedTaskActiveFilterCount" class="result-filter-count">
+                    {{ generatedTaskActiveFilterCount }}
+                  </span>
+                </button>
+              </a-tooltip>
+              <template #content>
+                <div class="generate-filter-panel">
+                  <div class="generate-filter-panel-head">
+                    <div>
+                      <div class="generate-filter-panel-title">筛选生成任务</div>
+                      <div class="generate-filter-panel-desc">条件变化后会自动刷新当前任务</div>
+                    </div>
+                    <button type="button" class="generate-filter-reset" @click="resetGeneratedTaskFilters">
+                      重置
+                    </button>
+                  </div>
+
+                  <div class="generate-filter-expired-row">
+                    <span>不展示已过期任务图片（15天之前）</span>
+                    <a-switch
+                      v-model:checked="generatedTaskHideExpiredFilter"
+                      size="small"
+                      class="warm-switch"
+                    />
+                  </div>
+
+                  <div class="generate-filter-expired-row">
+                    <span>不展示错误任务图片</span>
+                    <a-switch
+                      v-model:checked="generatedTaskHideFailedFilter"
+                      size="small"
+                      class="warm-switch"
+                    />
+                  </div>
+
+                  <div class="generate-filter-grid">
+                    <label class="generate-filter-field generate-filter-field-third">
+                      <span>类型</span>
+                      <a-select
+                        v-model:value="generatedTaskTypeFilter"
+                        allow-clear
+                        placeholder="全部类型"
+                        class="generate-filter-control"
+                      >
+                        <a-select-option value="text_generate">文生图</a-select-option>
+                        <a-select-option value="image_edit">图编辑</a-select-option>
+                        <a-select-option value="inpaint">局部重绘</a-select-option>
+                      </a-select>
+                    </label>
+                    <label class="generate-filter-field generate-filter-field-third">
+                      <span>来源</span>
+                      <a-select
+                        v-model:value="generatedTaskSourceFilter"
+                        allow-clear
+                        placeholder="全部来源"
+                        class="generate-filter-control"
+                      >
+                        <a-select-option value="web">Web</a-select-option>
+                        <a-select-option value="app">App</a-select-option>
+                        <a-select-option value="api">API</a-select-option>
+                      </a-select>
+                    </label>
+                    <label class="generate-filter-field generate-filter-field-third">
+                      <span>状态</span>
+                      <a-select
+                        v-model:value="generatedTaskStatusFilter"
+                        allow-clear
+                        placeholder="全部状态"
+                        class="generate-filter-control"
+                      >
+                        <a-select-option value="pending">等待中</a-select-option>
+                        <a-select-option value="processing">处理中</a-select-option>
+                        <a-select-option value="success">成功</a-select-option>
+                        <a-select-option value="failed">失败</a-select-option>
+                      </a-select>
+                    </label>
+                    <label class="generate-filter-field generate-filter-field-half">
+                      <span>模型</span>
+                      <a-select
+                        v-model:value="generatedTaskModelFilter"
+                        allow-clear
+                        show-search
+                        option-filter-prop="label"
+                        placeholder="全部模型"
+                        class="generate-filter-control"
+                      >
+                        <a-select-option
+                          v-for="option in generatedTaskFilterModelOptions"
+                          :key="option.value"
+                          :value="option.value"
+                          :label="option.label"
+                        >
+                          {{ option.label }}
+                        </a-select-option>
+                      </a-select>
+                    </label>
+                    <label class="generate-filter-field generate-filter-field-half">
+                      <span>提示词</span>
+                      <a-input
+                        v-model:value="generatedTaskPromptFilter"
+                        allow-clear
+                        placeholder="按提示词筛选"
+                        class="generate-filter-input"
+                      />
+                    </label>
+                  </div>
+
+                  <div class="generate-filter-date-card">
+                    <div class="generate-filter-date-title">
+                      <CalendarOutlined />
+                      <span>日期</span>
+                    </div>
+                    <div class="generate-filter-date-presets">
+                      <button type="button" class="generate-filter-date-preset" :class="{ active: generatedTaskDatePreset === 'today' }" @click="setGeneratedTaskDatePreset('today')">今天</button>
+                      <button type="button" class="generate-filter-date-preset" :class="{ active: generatedTaskDatePreset === 'yesterday' }" @click="setGeneratedTaskDatePreset('yesterday')">昨天</button>
+                      <button type="button" class="generate-filter-date-preset" :class="{ active: generatedTaskDatePreset === 'week' }" @click="setGeneratedTaskDatePreset('week')">近一周</button>
+                    </div>
+                    <div class="generate-filter-custom-date-row">
+                      <button type="button" class="generate-filter-date-preset generate-filter-date-custom" :class="{ active: generatedTaskDatePreset === 'custom' }" @click="generatedTaskDatePreset = 'custom'">
+                        自定义范围
+                        <DownOutlined />
+                      </button>
+                      <a-range-picker
+                        v-model:value="generatedTaskDateRangeFilter"
+                        class="generate-filter-date-picker"
+                        :allow-clear="true"
+                        @change="handleGeneratedTaskCustomDateChange"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </template>
+            </a-popover>
             <div class="result-retain-badge">
               <ExclamationCircleFilled class="result-retain-icon" />
               <span>服务器只保留原图15天</span>
@@ -3896,8 +4502,14 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
           </div>
         </div>
 
-        <div class="result-body">
-          <template v-if="resultItems.length">
+        <div ref="resultBodyRef" class="result-body" @scroll="handleGeneratedTaskResultScroll">
+          <div v-if="generatedTasksLoading && !resultItems.length" class="result-empty result-loading-state">
+            <a-spin :indicator="h(LoadingOutlined, { style: neutralIndicatorStyle })" />
+            <div class="empty-title">正在加载生成任务...</div>
+            <div class="empty-desc">会展示全部生图任务，继续下滑可自动加载更多。</div>
+          </div>
+
+          <template v-else-if="resultItems.length">
             <div class="result-list" :style="resultListStyle">
               <TransitionGroup name="generate-result" tag="div" class="result-grid">
                 <div
@@ -3940,9 +4552,9 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
                     :class="{
                       pending: item.image.status === 'pending',
                       failed: isGeneratedResultFailed(item.task, item.image),
-                      clickable: !!getGeneratedResultPreviewUrl(item.task, item.image),
+                      clickable: true,
                     }"
-                    @click="getGeneratedResultPreviewUrl(item.task, item.image) && handlePreview(getGeneratedResultPreviewUrl(item.task, item.image))"
+                    @click="openGeneratedTaskDetail(item.task, item.image)"
                   >
                     <template v-if="item.image.status === 'success' && getGeneratedResultDisplayUrl(item.task, item.image)">
                       <img :src="getGeneratedResultDisplayUrl(item.task, item.image)" alt="生成结果" loading="lazy" />
@@ -4059,10 +4671,20 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
               </TransitionGroup>
             </div>
 
-            <div class="result-list-footnote">
-              当前仅展示最近 20 个生图任务。若需查看更早记录、完整参数或全部结果，请前往
+            <div ref="generatedTaskLoadMoreAnchor" class="result-load-more-anchor"></div>
+            <div v-if="generatedTasksLoadingMore" class="result-list-footnote">
+              <a-spin :indicator="h(LoadingOutlined, { style: smallAccentIndicatorStyle })" />
+              <span>正在加载更多任务...</span>
+            </div>
+            <div v-else-if="hasMoreGeneratedTasks" class="result-list-footnote">
+              <a-button size="small" class="history-load-more-btn" @click="loadMoreGeneratedTasks">
+                加载更多任务
+              </a-button>
+            </div>
+            <div v-else class="result-list-footnote">
+              已展示全部匹配任务，可前往
               <router-link to="/history" class="result-tip-link">历史图片</router-link>
-              查看。
+              查看完整历史。
             </div>
           </template>
 
@@ -4114,6 +4736,19 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
       v-model:open="assetPickerOpen"
       title="选择个人素材"
       @select-asset="handlePickUserAsset"
+    />
+    <HistoryDetailDialog
+      v-if="detailOpen"
+      v-model:open="detailOpen"
+      :item="detailItem"
+      :model-options="detailModelOptions"
+      :has-prev="hasDetailPrev"
+      :has-next="hasDetailNext"
+      show-actions
+      @reedit="handleDetailReedit"
+      @download="handleDetailDownload"
+      @navigate-prev="navigateGeneratedTaskDetail(-1)"
+      @navigate-next="navigateGeneratedTaskDetail(1)"
     />
     <TemplateEditorDialog ref="templateDialogRef" />
     <PromptOptimizeStyleDialog
@@ -4299,7 +4934,10 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
   display: flex;
   flex: 1;
   flex-direction: column;
+  width: 100%;
   min-height: 0;
+  min-width: 0;
+  background: transparent;
 }
 
 .generate-mode-switch {
@@ -4308,12 +4946,23 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
   justify-content: space-between;
   gap: 14px;
   margin-bottom: 14px;
+  min-width: 0;
+  container-type: inline-size;
+  container-name: generate-mode-switch;
 }
 
 .mode-switch-cluster {
   min-width: 0;
   display: flex;
   align-items: center;
+}
+
+.mode-switch-cluster:first-child {
+  flex: 1 1 auto;
+}
+
+.mode-switch-cluster:last-child {
+  flex: 0 0 auto;
 }
 
 .mode-switch-group {
@@ -4335,7 +4984,7 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
   appearance: none;
   border: 1px solid transparent;
   background: transparent;
-  color: #8f7558;
+  color: var(--theme-nav-text);
   padding: 0;
   border-radius: 16px;
   cursor: pointer;
@@ -4347,7 +4996,7 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
     border-color var(--motion-duration-fast) var(--motion-ease-soft);
 
   &:hover {
-    color: #b77a17;
+    color: var(--theme-nav-hover-text);
     transform: translateY(-1px);
   }
 
@@ -4387,7 +5036,7 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
 }
 
 .mode-switch-btn.tool {
-  min-width: 152px;
+  min-width: 126px;
   border-width: 1px;
   border-style: solid;
   border-color: var(--theme-control-border-strong);
@@ -4420,6 +5069,15 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
 
   .anticon {
     font-size: 16px;
+    width: 1em;
+    height: 1em;
+    opacity: 0.88;
+  }
+
+  .nav-generate-image-icon {
+    font-size: 16px;
+    width: 1em;
+    height: 1em;
     opacity: 0.88;
   }
 }
@@ -4433,6 +5091,41 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
   .anticon {
     font-size: 17px;
   }
+
+  .nav-generate-image-icon {
+    font-size: 17px;
+  }
+}
+
+@media (min-width: 961px) {
+  @container generate-mode-switch (max-width: 430px) {
+    .mode-switch-group-primary .mode-switch-btn {
+      min-width: 0;
+    }
+
+    .mode-switch-btn.tool,
+    .tool-trigger {
+      min-width: 42px;
+      width: 42px;
+      padding: 0;
+      justify-content: center;
+      gap: 0;
+    }
+
+    .mode-switch-trigger-content {
+      justify-content: center;
+    }
+
+    .mode-switch-trigger-icon {
+      font-size: 16px;
+      opacity: 0.88;
+    }
+
+    .mode-switch-trigger-value,
+    .mode-switch-trigger-arrow {
+      display: none;
+    }
+  }
 }
 
 .tool-trigger {
@@ -4442,7 +5135,7 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
   gap: 8px;
   height: 42px;
   min-height: 42px;
-  padding: 0 12px;
+  padding: 0 10px;
   border-radius: 13px;
 }
 
@@ -4576,6 +5269,12 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
   }
 }
 
+.prompt-label-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .prompt-label-actions {
   display: inline-flex;
   align-items: center;
@@ -4644,11 +5343,11 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
   height: 32px;
   padding: 0 12px !important;
   border-radius: 12px;
-  color: #a88962 !important;
+  color: var(--theme-title) !important;
   font-size: 13px;
   font-weight: 600;
-  background: rgba(255, 250, 242, 0.92) !important;
-  border: 1px solid rgba(241, 221, 183, 0.95) !important;
+  background: var(--theme-control-bg) !important;
+  border: 1px solid var(--theme-control-border-strong) !important;
   transition:
     transform var(--motion-duration-press) var(--motion-ease-soft),
     background var(--motion-duration-fast) var(--motion-ease-soft),
@@ -4657,15 +5356,66 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
     box-shadow var(--motion-duration-fast) var(--motion-ease-soft);
 
   &:hover {
-    color: #d38a12 !important;
-    background: rgba(255, 238, 205, 0.92) !important;
-    border-color: #efc784 !important;
+    color: var(--theme-title) !important;
+    background: var(--theme-control-hover-bg) !important;
+    border-color: var(--theme-border-strong) !important;
     transform: translateY(-1px);
     box-shadow: 0 10px 20px var(--theme-shadow-soft);
   }
 
   &:active {
-    transform: scale(0.94);
+    transform: scale(0.97);
+  }
+}
+
+.prompt-icon-btn-wrap {
+  display: inline-flex;
+}
+
+.prompt-icon-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--theme-control-border-strong);
+  border-radius: 12px;
+  background: var(--theme-control-bg);
+  color: var(--theme-title);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    transform var(--motion-duration-press) var(--motion-ease-soft),
+    background var(--motion-duration-fast) var(--motion-ease-soft),
+    border-color var(--motion-duration-fast) var(--motion-ease-soft),
+    color var(--motion-duration-fast) var(--motion-ease-soft);
+
+  &:hover,
+  &:focus-visible {
+    background: var(--theme-control-hover-bg);
+    border-color: var(--theme-border-strong);
+    transform: translateY(-1px);
+  }
+
+  &:active {
+    transform: scale(0.97);
+  }
+
+  &:disabled {
+    cursor: wait;
+    opacity: 0.7;
+  }
+
+  :deep(.anticon),
+  :deep(.nav-generate-image-icon) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0;
+    font-size: inherit;
   }
 }
 
@@ -4871,6 +5621,13 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
     margin: 0;
     font-weight: 700;
   }
+}
+
+.panel-head-main {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
 }
 
 .panel-head-actions {
@@ -6034,6 +6791,25 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
   font-size: 21px;
 }
 
+.result-filter-count {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--theme-accent-contrast);
+  background: var(--theme-accent);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  box-shadow: 0 6px 12px var(--theme-shadow-strong);
+}
+
 .generate-view-panel {
   width: 260px;
   color: var(--theme-title);
@@ -6150,6 +6926,204 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
 
 :global(.generate-view-popover .ant-popover-inner-content) {
   padding: 14px;
+}
+
+.generate-filter-panel {
+  width: min(480px, calc(100vw - 32px));
+  padding: 2px;
+  color: var(--theme-title);
+}
+
+.generate-filter-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.generate-filter-panel-title {
+  color: var(--theme-title);
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.generate-filter-panel-desc {
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.generate-filter-reset {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--theme-panel-border);
+  border-radius: 999px;
+  background: var(--theme-panel-bg-soft);
+  color: var(--theme-accent-text);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    color var(--motion-duration-fast) var(--motion-ease-soft),
+    background var(--motion-duration-fast) var(--motion-ease-soft),
+    border-color var(--motion-duration-fast) var(--motion-ease-soft);
+
+  &:hover,
+  &:focus-visible {
+    color: var(--theme-accent-text-hover);
+    border-color: var(--theme-border-strong);
+    background: var(--theme-control-hover-bg);
+  }
+}
+
+.generate-filter-expired-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  padding: 11px 12px;
+  border: 1px solid var(--theme-panel-border);
+  border-radius: 14px;
+  background: var(--theme-panel-bg-soft);
+  color: var(--theme-title);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.generate-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 11px;
+}
+
+.generate-filter-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 7px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.generate-filter-field-third {
+  grid-column: span 2;
+}
+
+.generate-filter-field-half {
+  grid-column: span 3;
+}
+
+.generate-filter-control,
+.generate-filter-input {
+  width: 100%;
+}
+
+.generate-filter-control :deep(.ant-select-selector),
+.generate-filter-input.ant-input-affix-wrapper {
+  min-height: 36px !important;
+  border-radius: 12px !important;
+  border-color: var(--theme-control-border) !important;
+  background: var(--theme-control-bg) !important;
+  box-shadow: none !important;
+}
+
+.generate-filter-date-card {
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid var(--theme-panel-border);
+  background: linear-gradient(180deg, var(--theme-panel-bg-soft), var(--theme-panel-bg));
+}
+
+.generate-filter-date-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--theme-title);
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.3;
+
+  .anticon {
+    color: #27a7df;
+    font-size: 20px;
+  }
+}
+
+.generate-filter-date-presets {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.generate-filter-date-preset {
+  min-height: 34px;
+  padding: 0 11px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: var(--theme-control-hover-bg);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    transform var(--motion-duration-press) var(--motion-ease-soft),
+    color var(--motion-duration-fast) var(--motion-ease-soft),
+    background var(--motion-duration-fast) var(--motion-ease-soft),
+    border-color var(--motion-duration-fast) var(--motion-ease-soft);
+
+  &:hover,
+  &:focus-visible,
+  &.active {
+    color: var(--theme-title);
+    border-color: var(--theme-border-strong);
+    background: var(--theme-panel-bg-strong);
+  }
+
+  &:active {
+    transform: scale(0.98);
+  }
+}
+
+.generate-filter-custom-date-row {
+  display: grid;
+  grid-template-columns: minmax(128px, 0.78fr) minmax(0, 1.22fr);
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.generate-filter-date-custom {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.generate-filter-date-picker.ant-picker {
+  width: 100%;
+  min-height: 34px;
+  border-radius: 10px !important;
+  border-color: var(--theme-control-border) !important;
+  background: var(--theme-control-bg) !important;
+  box-shadow: none !important;
+}
+
+:global(.generate-filter-popover .ant-popover-inner) {
+  border-radius: 20px;
+  background: var(--theme-modal-bg);
+  border: 1px solid var(--theme-panel-border);
+  box-shadow: 0 22px 48px var(--theme-shadow-medium);
+}
+
+:global(.generate-filter-popover .ant-popover-inner-content) {
+  padding: 16px;
 }
 
 .result-head {
@@ -6307,6 +7281,21 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
   font-size: 12px;
   line-height: 1.7;
   text-align: center;
+}
+
+.result-load-more-anchor {
+  width: 100%;
+  height: 1px;
+  margin-top: 1px;
+}
+
+.history-load-more-btn {
+  border-radius: 999px;
+  border-color: var(--theme-control-border) !important;
+  background: var(--theme-control-bg) !important;
+  color: var(--theme-accent-text) !important;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .result-card {
@@ -7293,6 +8282,37 @@ html:is([data-theme="dark"], [data-theme="midnight"]) .generate-page :deep(.gene
 }
 
 html:is([data-theme="dark"], [data-theme="midnight"]) .generate-page .prompt-library-btn,
+html:is([data-theme="dark"], [data-theme="midnight"]) .generate-page .asset-library-btn {
+  color: var(--text-secondary) !important;
+  background: var(--theme-panel-bg-soft) !important;
+  border-color: var(--theme-panel-border) !important;
+
+  &:hover {
+    color: var(--theme-title) !important;
+    background: var(--theme-control-hover-bg) !important;
+    border-color: var(--theme-border-strong) !important;
+    box-shadow: 0 10px 20px var(--theme-shadow-soft);
+  }
+}
+
+html:is([data-theme="dark"], [data-theme="midnight"]) .generate-page .prompt-icon-btn,
+html:is([data-theme="dark"], [data-theme="midnight"]) .generate-page :deep(.generate-style-trigger),
+html:is([data-theme="dark"], [data-theme="midnight"]) .generate-page :deep(.generate-camera-trigger) {
+  color: var(--text-secondary);
+  background: var(--theme-panel-bg-soft);
+  border: 1px solid var(--theme-panel-border);
+  box-shadow: none;
+
+  &:hover,
+  &:focus-visible,
+  &.open {
+    color: var(--theme-title);
+    background: var(--theme-control-hover-bg);
+    border-color: var(--theme-border-strong);
+    box-shadow: none;
+  }
+}
+
 html:is([data-theme="dark"], [data-theme="midnight"]) .generate-page .generate-config-panel .prompt-input {
   border: none !important;
   background: transparent !important;
