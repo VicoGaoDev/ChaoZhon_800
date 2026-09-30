@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { CloseOutlined, GiftOutlined } from "@ant-design/icons-vue";
-import { resolveImageUrl } from "@/api/images";
+import { resolvePreviewImageUrl } from "@/api/images";
 import type { ActivityItem } from "@/types";
 
 const props = withDefaults(defineProps<{
@@ -16,7 +16,7 @@ const emit = defineEmits<{
   (event: "contact"): void;
 }>();
 
-const imageSrc = computed(() => resolveImageUrl(props.activity?.image_url || ""));
+const imageSrc = computed(() => resolvePreviewImageUrl(props.activity?.image_url || ""));
 const description = computed(() => props.activity?.description?.trim() || "点击查看活动详情");
 const sideTabRef = ref<HTMLElement | null>(null);
 const RETRACT_DURATION_MS = 520;

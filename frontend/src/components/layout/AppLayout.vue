@@ -1716,6 +1716,7 @@ watch(purchaseDialogOpen, (open) => {
       title="联系我们"
       :footer="null"
       :width="420"
+      :z-index="1400"
       centered
     >
       <div class="credits-contact-modal">
