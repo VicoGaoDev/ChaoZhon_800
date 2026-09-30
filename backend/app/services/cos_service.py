@@ -23,6 +23,7 @@ UPLOAD_PURPOSE_PREFIXES = {
     "mask": "mask",
     "reverse": "reverse",
     "misc": "misc",
+    "activity": "activity",
     "template": "template",
     "generated": "generated",
 }
@@ -35,7 +36,7 @@ PUT_OBJECT_ACTIONS = [
 
 
 def get_upload_size_limit(purpose: str) -> int:
-    if purpose == "ref":
+    if purpose in {"ref", "activity"}:
         return REFERENCE_MAX_UPLOAD_SIZE
     return MAX_UPLOAD_SIZE
 

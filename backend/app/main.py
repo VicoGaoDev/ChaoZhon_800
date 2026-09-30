@@ -116,6 +116,7 @@ def on_startup():
         _ensure_history_pin_schema()
         _ensure_user_asset_schema()
         _ensure_api_alert_schema()
+        _ensure_activity_schema()
         if settings.should_run_schema_compat:
             _ensure_schema_compat()
         _backfill_task_credit_costs()
@@ -1067,6 +1068,15 @@ def _ensure_image_required_columns():
             conn.execute(text("CREATE INDEX idx_images_request_finished_at ON images (request_finished_at)"))
 
 
+def _ensure_activity_schema():
+    inspector = inspect(engine)
+    if "activities" in inspector.get_table_names():
+        return
+    from app.models.activity import Activity
+
+    Activity.__table__.create(bind=engine)
+
+
 def _ensure_api_alert_schema():
     inspector = inspect(engine)
     table_names = set(inspector.get_table_names())
@@ -1946,7 +1956,7 @@ upload_path = Path(settings.UPLOAD_DIR)
 upload_path.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=str(upload_path)), name="uploads")
 
-from app.api import auth, tasks, images, history, admin, upload, api_key, templates, prompt_reverse, prompt_optimize, prompt_optimize_styles, generation_scene_categories, external_api_config, feedback, system_messages, user_api_keys, payment, user_assets, user_prompts  # noqa: E402
+from app.api import auth, tasks, images, history, admin, upload, api_key, templates, prompt_reverse, prompt_optimize, prompt_optimize_styles, generation_scene_categories, external_api_config, feedback, system_messages, user_api_keys, payment, user_assets, user_prompts, activities  # noqa: E402
 app.include_router(auth.router)
 app.include_router(user_api_keys.router)
 app.include_router(templates.router)
@@ -1961,6 +1971,8 @@ app.include_router(payment.router)
 app.include_router(feedback.router)
 app.include_router(system_messages.router)
 app.include_router(system_messages.admin_router)
+app.include_router(activities.router)
+app.include_router(activities.admin_router)
 app.include_router(admin.router)
 app.include_router(upload.router)
 app.include_router(api_key.router)

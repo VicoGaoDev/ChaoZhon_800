@@ -1244,7 +1244,33 @@ export interface TaskSceneConfig {
   category_sort_order?: number | null;
 }
 
-export type UploadPurpose = "ref" | "source" | "mask" | "reverse" | "misc" | "template";
+export type ActivityStatus = "enabled" | "disabled";
+
+export interface ActivityItem {
+  activity_id: string;
+  title: string;
+  image_url: string;
+  description: string;
+  status: ActivityStatus;
+  sort_order: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface ActivityListResponse {
+  total: number;
+  items: ActivityItem[];
+}
+
+export interface ActivityPayload {
+  title: string;
+  image_url: string;
+  description: string;
+  status: ActivityStatus;
+  sort_order: number;
+}
+
+export type UploadPurpose = "ref" | "source" | "mask" | "reverse" | "misc" | "activity" | "template";
 
 export interface UploadCredential {
   bucket: string;

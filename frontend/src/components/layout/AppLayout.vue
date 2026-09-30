@@ -17,6 +17,7 @@ import { validateInviteCode } from "@/api/inviteRewards";
 import { createPaymentOrder, listPaymentPlans } from "@/api/payments";
 import { createFeedback, getMyCompletedUnreadFeedbackCount } from "@/api/feedback";
 import { getAdminUnresolvedFeedbackCount } from "@/api/admin";
+import { getActiveActivity } from "@/api/activities";
 import { withBaseUrl } from "@/lib/assets";
 import {
   getStoredAdminUnresolvedFeedbackCount,
@@ -38,7 +39,8 @@ import { subscribeAuthSessionExpired } from "@/lib/authSessionNotice";
 import { APP_THEME_ATTRIBUTE, type AppThemeName } from "@/config/theme";
 import { getCurrentTheme } from "@/lib/theme";
 import NavGenerateImageIcon from "@/components/icons/NavGenerateImageIcon.vue";
-import type { AnnouncementConfig, PaymentPlan } from "@/types";
+import ActivityPromotion from "@/components/generate/ActivityPromotion.vue";
+import type { ActivityItem, AnnouncementConfig, PaymentPlan } from "@/types";
 import {
   PictureOutlined,
   FontSizeOutlined,
@@ -105,6 +107,7 @@ const routeOrder = new Map<string, number>([
   ["/admin/dashboard", 17],
   ["/admin/error-analytics", 18],
   ["/admin/general-settings", 19],
+  ["/admin/activities", 19.2],
   ["/admin/redeem-keys", 20],
   ["/admin/revenue", 21],
   ["/admin/invite-rewards", 22],
@@ -203,6 +206,7 @@ const adminMenuItems = computed(() =>
     { key: "/admin/dashboard", label: "数据统计", icon: BarChartOutlined, superAdminOnly: false },
     { key: "/admin/error-analytics", label: "错误统计", icon: BugOutlined, superAdminOnly: false },
     { key: "/admin/general-settings", label: "通用设置", icon: SettingOutlined, superAdminOnly: false },
+    { key: "/admin/activities", label: "活动管理", icon: GiftOutlined, superAdminOnly: false },
     { key: "/admin/redeem-keys", label: "兑换码", icon: GiftOutlined, superAdminOnly: false },
     { key: "/admin/payment-orders", label: "购买订单", icon: AccountBookOutlined, superAdminOnly: false },
     { key: "/admin/invite-rewards", label: "邀请奖励", icon: ShareAltOutlined, superAdminOnly: false },
@@ -237,7 +241,7 @@ const adminMenuGroups = computed(() =>
       key: "admin-third-party",
       label: "第三方管理",
       icon: KeyOutlined,
-      itemKeys: ["/admin/general-settings", "/admin/cos-config", "/admin/external-api-configs", "/admin/generation-scene-categories"],
+      itemKeys: ["/admin/general-settings", "/admin/activities", "/admin/cos-config", "/admin/external-api-configs", "/admin/generation-scene-categories"],
     },
   ].map((group) => ({
     ...group,
@@ -858,6 +862,8 @@ async function handleRedeemCredits() {
 
 const creditsContactVisible = ref(false);
 const contactQrImage = ref("");
+const activeActivity = ref<ActivityItem | null>(null);
+const activityPopupOpen = ref(false);
 const announcementVisible = ref(false);
 const announcementDismissToday = ref(false);
 const announcementConfig = ref<AnnouncementConfig>({
@@ -898,6 +904,21 @@ function handleAnnouncementClose() {
     }));
   }
   announcementVisible.value = false;
+}
+
+async function loadActiveActivity(options?: { autoOpen?: boolean }) {
+  try {
+    const activity = await getActiveActivity();
+    activeActivity.value = activity;
+    if (options?.autoOpen !== false && activity) {
+      activityPopupOpen.value = true;
+    } else if (!activity) {
+      activityPopupOpen.value = false;
+    }
+  } catch {
+    activeActivity.value = null;
+    activityPopupOpen.value = false;
+  }
 }
 
 async function checkAnnouncement() {
@@ -972,6 +993,7 @@ onMounted(async () => {
       contactQrImage.value = res.contact_qr_image || "";
     })(),
     checkAnnouncement(),
+    loadActiveActivity({ autoOpen: true }),
     loadPaymentPlans(),
   ]);
 
@@ -2085,6 +2107,13 @@ watch(purchaseDialogOpen, (open) => {
         </div>
       </a-form>
     </a-modal>
+
+    <ActivityPromotion
+      v-if="activeActivity"
+      v-model:open="activityPopupOpen"
+      :activity="activeActivity"
+      @contact="openCreditsContact"
+    />
   </a-layout>
 </template>
 
