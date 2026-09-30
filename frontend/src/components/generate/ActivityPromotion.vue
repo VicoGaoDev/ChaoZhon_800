@@ -59,7 +59,7 @@ function onOverlayLeave(el: Element, done: () => void) {
   image.style.maxWidth = "none";
   image.style.maxHeight = "none";
   image.style.margin = "0";
-  image.style.zIndex = "1200";
+  image.style.zIndex = "1300";
   image.style.transformOrigin = "center center";
   image.style.transition = "none";
   image.style.transform = "translate(0px, 0px) scale(1)";
@@ -183,7 +183,7 @@ function handleImageClick() {
 .activity-image-overlay {
   position: fixed;
   inset: 0;
-  z-index: 900;
+  z-index: 1200;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -195,9 +195,9 @@ function handleImageClick() {
 
 .activity-close-btn {
   position: fixed;
-  top: 18px;
-  right: 18px;
-  z-index: 910;
+  top: max(18px, calc(env(safe-area-inset-top) + 12px));
+  right: max(18px, calc(env(safe-area-inset-right) + 12px));
+  z-index: 2;
   width: 40px;
   height: 40px;
   border: 0;
@@ -219,6 +219,8 @@ function handleImageClick() {
 
 .activity-image-button {
   appearance: none;
+  position: relative;
+  z-index: 1;
   border: 0;
   padding: 0;
   margin: 0;
@@ -283,8 +285,8 @@ function handleImageClick() {
   }
 
   .activity-close-btn {
-    top: 12px;
-    right: 12px;
+    top: max(12px, calc(env(safe-area-inset-top) + 8px));
+    right: max(12px, calc(env(safe-area-inset-right) + 8px));
     width: 36px;
     height: 36px;
   }
