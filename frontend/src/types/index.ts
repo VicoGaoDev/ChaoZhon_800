@@ -1276,6 +1276,7 @@ export interface UploadCredential {
   bucket: string;
   region: string;
   key: string;
+  upload_domain: string;
   url: string;
   tmp_secret_id: string;
   tmp_secret_key: string;

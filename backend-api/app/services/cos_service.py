@@ -56,6 +56,14 @@ def _normalize_cos_base_url(value: str, bucket: str, region: str) -> str:
     return f"https://{bucket}.cos.{region}.myqcloud.com"
 
 
+def _extract_domain_from_url(value: str, fallback: str) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return fallback
+    parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+    return (parsed.netloc or parsed.path).strip().rstrip("/") or fallback
+
+
 def _extract_app_id(bucket: str) -> str:
     _, sep, app_id = bucket.rpartition("-")
     if not sep or not app_id.isdigit():
@@ -211,6 +219,10 @@ def create_upload_credential(
         "bucket": config.bucket,
         "region": config.region,
         "key": key,
+        "upload_domain": _extract_domain_from_url(
+            config.public_base_url,
+            f"{config.bucket}.cos.{config.region}.myqcloud.com",
+        ),
         "url": build_cos_public_url(config, key),
         "tmp_secret_id": tmp_secret_id,
         "tmp_secret_key": tmp_secret_key,

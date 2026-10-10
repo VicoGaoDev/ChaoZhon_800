@@ -28,6 +28,7 @@ class UploadCredentialResponse(BaseModel):
     bucket: str
     region: str
     key: str
+    upload_domain: str
     url: str
     tmp_secret_id: str
     tmp_secret_key: str
