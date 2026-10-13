@@ -23,6 +23,7 @@ class PaymentOrder(Base):
     return_payload = Column(Text, nullable=False, default="")
     paid_at = Column(DateTime, nullable=True)
     credited_at = Column(DateTime, nullable=True)
+    reconcile_until_at = Column(DateTime, nullable=True)
     closed_at = Column(DateTime, nullable=True)
     failed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now())

@@ -15,6 +15,7 @@ from app.models.generation_scene_category import GenerationSceneCategory
 from app.models.credit_log import CreditLog
 from app.models.credit_redeem_key import CreditRedeemKey
 from app.models.payment_order import PaymentOrder
+from app.models.payment_reconcile_scan_run import PaymentReconcileScanRun
 from app.models.referral_reward_grant import ReferralRewardGrant
 from app.models.user_credit import UserCredit
 from app.models.user_api_key import UserApiKey
@@ -48,6 +49,7 @@ __all__ = [
     "CreditLog",
     "CreditRedeemKey",
     "PaymentOrder",
+    "PaymentReconcileScanRun",
     "ReferralRewardGrant",
     "UserCredit",
     "UserApiKey",

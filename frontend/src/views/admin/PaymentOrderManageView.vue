@@ -1,15 +1,22 @@
 <script setup lang="ts">
-import { reactive, ref, onMounted } from "vue";
+import { computed, reactive, ref, onMounted } from "vue";
 import { message } from "ant-design-vue";
 import dayjs from "dayjs";
 import type { Dayjs } from "dayjs";
-import { AccountBookOutlined, CopyOutlined } from "@ant-design/icons-vue";
-import { listPaymentOrders } from "@/api/admin";
+import { AccountBookOutlined, CopyOutlined, SyncOutlined } from "@ant-design/icons-vue";
+import {
+  listPaymentOrders,
+  triggerPaymentOrderReconcileScan,
+  type PaymentOrderReconcileScanStatus,
+} from "@/api/admin";
 import type { AdminPaymentOrder } from "@/types";
 
 type DateShortcut = "today" | "last7Days" | "last30Days" | "thisWeek" | "thisMonth";
 
 const loading = ref(false);
+const scanLoading = ref(false);
+const scanStatusVisible = ref(false);
+const scanStatus = ref<PaymentOrderReconcileScanStatus | null>(null);
 const items = ref<AdminPaymentOrder[]>([]);
 const dateShortcut = ref<DateShortcut | undefined>("today");
 const detailVisible = ref(false);
@@ -72,6 +79,12 @@ function statusClass(status: AdminPaymentOrder["status"]) {
   if (status === "closed") return "warm-tag-muted";
   return "warm-tag-danger";
 }
+
+const scanStatusText = computed(() => {
+  if (!scanStatus.value || scanStatus.value.status === "idle") return "未启动";
+  if (scanStatus.value.status === "running") return "扫描中";
+  return "已结束";
+});
 
 function openDetail(record: AdminPaymentOrder) {
   selectedOrder.value = record;
@@ -193,6 +206,21 @@ async function handleCopy(text?: string, successText = "内容已复制") {
   }
 }
 
+async function handleTriggerScan() {
+  scanLoading.value = true;
+  try {
+    const res = await triggerPaymentOrderReconcileScan();
+    scanStatus.value = res;
+    scanStatusVisible.value = true;
+    message.success("订单状态扫描已完成");
+    await load();
+  } catch (err: any) {
+    message.error(err.response?.data?.detail || "启动订单状态扫描失败");
+  } finally {
+    scanLoading.value = false;
+  }
+}
+
 onMounted(load);
 </script>
 
@@ -207,6 +235,12 @@ onMounted(load);
           <div class="warm-page-title">购买订单</div>
           <div class="warm-page-desc">查看在线购买积分订单，支持按时间、用户和订单状态筛选。</div>
         </div>
+      </div>
+      <div class="header-actions">
+        <a-button class="scan-btn" :loading="scanLoading" @click="handleTriggerScan">
+          <template #icon><SyncOutlined /></template>
+          订单状态扫描
+        </a-button>
       </div>
     </div>
 
@@ -376,10 +410,81 @@ onMounted(load);
         </div>
       </template>
     </a-drawer>
+
+    <a-modal
+      v-model:open="scanStatusVisible"
+      title="订单状态扫描"
+      width="720px"
+      :footer="null"
+    >
+      <template v-if="scanStatus">
+        <div class="scan-summary-card">
+          <div>
+            <div class="detail-summary-label">扫描状态</div>
+            <a-tag class="warm-tag" :class="scanStatus.status === 'running' ? 'warm-tag-role-admin' : 'warm-tag-whitelist'">
+              {{ scanStatusText }}
+            </a-tag>
+          </div>
+          <div>
+            <div class="detail-summary-label">已扫描订单</div>
+            <div class="detail-summary-value">{{ scanStatus.scanned_count }}</div>
+          </div>
+          <div>
+            <div class="detail-summary-label">发现已支付</div>
+            <div class="detail-summary-value">{{ scanStatus.paid_detected_count }}</div>
+          </div>
+          <div>
+            <div class="detail-summary-label">完成发放积分</div>
+            <div class="detail-summary-value">{{ scanStatus.credited_count }}</div>
+          </div>
+        </div>
+
+        <div class="scan-time-row">
+          <span>开始：{{ fmtTime(scanStatus.started_at) }}</span>
+          <span>模式：单次扫描</span>
+          <span v-if="scanStatus.finished_at">结束：{{ fmtTime(scanStatus.finished_at) }}</span>
+        </div>
+
+        <div class="scan-events">
+          <div class="scan-events-title">扫描过程</div>
+          <a-empty v-if="!scanStatus.events.length" description="暂未扫描到订单" />
+          <div v-else class="scan-event-list">
+            <div v-for="event in scanStatus.events.slice().reverse()" :key="`${event.time}-${event.order_no}`" class="scan-event-item">
+              <div class="scan-event-main">
+                <span class="order-no-text">{{ event.order_no }}</span>
+                <a-tag v-if="event.paid_detected" color="green">已支付</a-tag>
+                <a-tag v-if="event.credited" color="blue">已发放积分</a-tag>
+              </div>
+              <div class="scan-event-desc">{{ event.message }}</div>
+              <div class="scan-event-meta">
+                <span>{{ fmtTime(event.time) }}</span>
+                <span>{{ event.status_before || "-" }} -> {{ event.status_after || "-" }}</span>
+                <span v-if="event.trade_status_after">{{ event.trade_status_after }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
+    </a-modal>
   </div>
 </template>
 
 <style scoped lang="scss">
+.header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.scan-btn {
+  border-radius: 12px;
+  border-color: rgba(255, 171, 37, 0.38);
+  background: rgba(255, 248, 234, 0.92);
+  color: #a05f00;
+}
+
 .payment-order-filter-bar {
   display: flex;
   align-items: center;
@@ -507,6 +612,67 @@ onMounted(load);
   background: rgba(255, 248, 234, 0.72);
 }
 
+.scan-summary-card {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  padding: 14px;
+  margin-bottom: 12px;
+  border: 1px solid rgba(193, 141, 72, 0.2);
+  border-radius: 14px;
+  background: rgba(255, 248, 234, 0.72);
+}
+
+.scan-time-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-bottom: 14px;
+  color: #8c7458;
+  font-size: 12px;
+}
+
+.scan-events-title {
+  margin-bottom: 10px;
+  color: #4a3824;
+  font-weight: 700;
+}
+
+.scan-event-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 360px;
+  overflow: auto;
+}
+
+.scan-event-item {
+  padding: 10px 12px;
+  border: 1px solid rgba(193, 141, 72, 0.16);
+  border-radius: 12px;
+  background: rgba(255, 252, 245, 0.88);
+}
+
+.scan-event-main,
+.scan-event-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.scan-event-desc {
+  margin-top: 6px;
+  color: #4a3824;
+  font-size: 13px;
+}
+
+.scan-event-meta {
+  margin-top: 6px;
+  color: #8c7458;
+  font-size: 12px;
+}
+
 .detail-summary-label {
   margin-bottom: 6px;
   color: #8c7458;
@@ -560,5 +726,16 @@ onMounted(load);
 
 :deep(.compact-payment-order-table .ant-table-cell) {
   word-break: break-word;
+}
+
+@media (max-width: 768px) {
+  .header-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .scan-summary-card {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 </style>

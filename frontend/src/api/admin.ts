@@ -151,6 +151,39 @@ export function listPaymentOrders(params: {
   return client.get("/admin/payment-orders", { params });
 }
 
+export interface PaymentOrderReconcileScanEvent {
+  time: string;
+  order_no: string;
+  status_before: string;
+  status_after: string;
+  trade_status_before: string;
+  trade_status_after: string;
+  paid_detected: boolean;
+  credited: boolean;
+  message: string;
+}
+
+export interface PaymentOrderReconcileScanStatus {
+  id: number | null;
+  status: "idle" | "running" | "finished";
+  duration_seconds: number;
+  scanned_count: number;
+  paid_detected_count: number;
+  credited_count: number;
+  started_at?: string | null;
+  active_until?: string | null;
+  finished_at?: string | null;
+  events: PaymentOrderReconcileScanEvent[];
+}
+
+export function triggerPaymentOrderReconcileScan(): Promise<PaymentOrderReconcileScanStatus> {
+  return client.post("/admin/payment-orders/reconcile-scan");
+}
+
+export function getPaymentOrderReconcileScanStatus(runId?: number | null): Promise<PaymentOrderReconcileScanStatus> {
+  return client.get("/admin/payment-orders/reconcile-scan", { params: { run_id: runId || undefined } });
+}
+
 export function createRedeemKeysBatch(count: number, creditAmount: number): Promise<AdminRedeemKeyBatchResult> {
   return client.post("/admin/redeem-keys/batch", {
     count,

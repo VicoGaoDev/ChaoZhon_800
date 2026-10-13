@@ -74,6 +74,9 @@ class Settings(BaseSettings):
     ALIPAY_RETURN_URL: str = ""
     ALIPAY_SIGN_TYPE: str = "RSA2"
     ALIPAY_TIMEOUT_EXPRESS: str = "15m"
+    ALIPAY_RECONCILE_ENABLED: bool = True
+    ALIPAY_RECONCILE_INTERVAL_SECONDS: int = 4
+    ALIPAY_RECONCILE_MAX_SECONDS: int = 120
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

@@ -45,6 +45,10 @@ from app.services.feedback_service import (
 )
 from app.services.history_service import get_admin_history_cards, get_admin_history_detail, get_all_history
 from app.services.api_alert_service import ApiAlertRunResult, execute_api_alerts
+from app.services.payment_reconcile_scheduler import (
+    get_manual_payment_reconcile_status,
+    trigger_manual_payment_reconcile,
+)
 from app.services.daily_report_service import send_previous_day_report
 
 router = APIRouter(prefix="/api/admin", tags=["管理员"])
@@ -284,6 +288,21 @@ def admin_payment_orders(
         start_date=start_date,
         end_date=end_date,
     )
+
+
+@router.post("/payment-orders/reconcile-scan", response_model=dict)
+def admin_trigger_payment_order_reconcile_scan(
+    _user: User = Depends(require_admin),
+):
+    return trigger_manual_payment_reconcile()
+
+
+@router.get("/payment-orders/reconcile-scan", response_model=dict)
+def admin_get_payment_order_reconcile_scan_status(
+    run_id: int | None = Query(None, ge=1),
+    _user: User = Depends(require_admin),
+):
+    return get_manual_payment_reconcile_status(run_id)
 
 
 @router.get("/stats", response_model=StatsOut)

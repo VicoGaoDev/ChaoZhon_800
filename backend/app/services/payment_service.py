@@ -258,6 +258,7 @@ def create_payment_order(
     timeout_express: str,
     private_key: str,
     sign_type: str,
+    reconcile_max_seconds: int,
 ) -> dict:
     missing_config_fields: list[str] = []
     if not (alipay_app_id or "").strip():
@@ -279,6 +280,7 @@ def create_payment_order(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"支付宝支付配置不完整，缺少: {', '.join(missing_config_fields)}",
         )
+    reconcile_seconds = max(int(reconcile_max_seconds or 0), 0)
     plan = get_payment_plan(plan_key)
     order_no = generate_order_no()
     order = PaymentOrder(
@@ -290,6 +292,7 @@ def create_payment_order(
         amount_fen=plan.amount_fen,
         credits=plan.credits,
         status=PAYMENT_STATUS_CREATED,
+        reconcile_until_at=now_local() + timedelta(seconds=reconcile_seconds) if reconcile_seconds else None,
     )
     db.add(order)
     db.flush()
@@ -341,6 +344,27 @@ def get_payment_order_for_user_with_sync(
     alipay_public_key: str,
 ) -> PaymentOrder:
     order = get_payment_order_for_user(db, order_no=order_no, user=user)
+    return sync_payment_order_from_alipay(
+        db,
+        order=order,
+        alipay_app_id=alipay_app_id,
+        gateway=gateway,
+        private_key=private_key,
+        sign_type=sign_type,
+        alipay_public_key=alipay_public_key,
+    )
+
+
+def sync_payment_order_from_alipay(
+    db: Session,
+    *,
+    order: PaymentOrder,
+    alipay_app_id: str,
+    gateway: str,
+    private_key: str,
+    sign_type: str,
+    alipay_public_key: str,
+) -> PaymentOrder:
     if order.status not in ALIPAY_QUERYABLE_STATUSES:
         return order
 

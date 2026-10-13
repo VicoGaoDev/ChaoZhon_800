@@ -69,8 +69,12 @@ def create_order(
         timeout_express=settings.ALIPAY_TIMEOUT_EXPRESS,
         private_key=settings.ALIPAY_PRIVATE_KEY,
         sign_type=settings.ALIPAY_SIGN_TYPE,
+        reconcile_max_seconds=settings.ALIPAY_RECONCILE_MAX_SECONDS,
     )
     db.commit()
+    from app.services.payment_reconcile_scheduler import notify_payment_reconcile_scheduler
+
+    notify_payment_reconcile_scheduler()
     return order
 
 
