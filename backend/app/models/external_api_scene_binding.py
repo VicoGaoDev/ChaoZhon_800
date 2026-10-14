@@ -25,6 +25,7 @@ class ExternalApiSceneBinding(Base):
     display_name = Column(String(100), nullable=False, default="", server_default="")
     subtitle = Column(String(255), nullable=False, default="", server_default="")
     credit_cost = Column(Integer, nullable=False, default=0, server_default="0")
+    estimated_seconds = Column(Integer, nullable=False, default=60, server_default="60")
     max_reference_images = Column(Integer, nullable=False, default=0, server_default="0")
     aspect_ratio_options_json = Column(Text, nullable=False, default="[]", server_default="[]")
     image_size_options_json = Column(Text, nullable=False, default="[]", server_default="[]")

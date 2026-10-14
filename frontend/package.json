@@ -11,6 +11,7 @@
   "dependencies": {
     "@ant-design/icons-vue": "^7.0.1",
     "@cloudbase/js-sdk": "^2.27.5",
+    "@types/markdown-it": "^14.2.0",
     "@wangeditor/editor": "^5.1.23",
     "@wangeditor/editor-for-vue": "^5.1.12",
     "ant-design-vue": "^4.2.6",
@@ -18,6 +19,7 @@
     "cos-js-sdk-v5": "^1.10.1",
     "dayjs": "^1.11.13",
     "echarts": "^6.0.0",
+    "markdown-it": "^15.0.2",
     "pinia": "^2.3.0",
     "qrcode": "^1.5.4",
     "vue": "^3.5.13",

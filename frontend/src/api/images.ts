@@ -22,6 +22,36 @@ export function resolveImageUrl(imageUrl?: string): string {
   return `${base}${imageUrl.startsWith("/") ? imageUrl : `/${imageUrl}`}`;
 }
 
+export function toOriginalImageUrl(imageUrl?: string): string {
+  const resolved = resolveImageUrl(imageUrl || "");
+  if (!resolved || resolved.startsWith("data:") || resolved.startsWith("blob:")) return resolved;
+  const [withoutHash, hash = ""] = resolved.split("#");
+  const [base, query = ""] = withoutHash.split("?");
+  const kept = query
+    .split("&")
+    .map((part) => part.trim())
+    .filter((part) => {
+      if (!part) return false;
+      const key = decodeURIComponent(part.split("=")[0] || "");
+      return !key.startsWith("imageMogr2") && !key.startsWith("imageView2");
+    });
+  const next = kept.length ? `${base}?${kept.join("&")}` : base;
+  return hash ? `${next}#${hash}` : next;
+}
+
+export function getPreviewImageSrc(imageUrl?: string): string {
+  return resolvePreviewImageUrl(imageUrl);
+}
+
+export function getAvatarImageSrc(imageUrl?: string): string {
+  const raw = (imageUrl || "").trim();
+  if (!raw || raw.startsWith("data:") || raw.startsWith("blob:")) return raw;
+  if (raw.startsWith("/uploads/") || raw.startsWith("uploads/")) return "";
+  const original = toOriginalImageUrl(raw);
+  if (!original || !/^https?:\/\//i.test(original)) return "";
+  return resolvePreviewImageUrl(original);
+}
+
 export function resolvePreviewImageUrl(imageUrl?: string): string {
   const resolvedUrl = resolveImageUrl(imageUrl);
   if (!resolvedUrl || resolvedUrl.startsWith("data:") || resolvedUrl.startsWith("blob:")) {

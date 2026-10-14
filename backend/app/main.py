@@ -118,6 +118,7 @@ def on_startup():
         _ensure_user_asset_schema()
         _ensure_api_alert_schema()
         _ensure_activity_schema()
+        _ensure_chat_schema()
         if settings.should_run_schema_compat:
             _ensure_schema_compat()
         _backfill_task_credit_costs()
@@ -331,6 +332,8 @@ def _ensure_schema_compat():
             if "credit_cost" not in scene_binding_columns:
                 conn.execute(text("ALTER TABLE external_api_scene_bindings ADD COLUMN credit_cost INTEGER DEFAULT 0"))
                 credit_cost_added = True
+            if "estimated_seconds" not in scene_binding_columns:
+                conn.execute(text("ALTER TABLE external_api_scene_bindings ADD COLUMN estimated_seconds INTEGER NOT NULL DEFAULT 60"))
             if "max_reference_images" not in scene_binding_columns:
                 conn.execute(text("ALTER TABLE external_api_scene_bindings ADD COLUMN max_reference_images INTEGER DEFAULT 0"))
                 max_reference_images_added = True
@@ -1441,6 +1444,8 @@ def _ensure_scene_binding_required_columns():
             conn.execute(text("ALTER TABLE external_api_scene_bindings ADD COLUMN custom_size_max INTEGER DEFAULT 3840"))
         if "custom_size_step" not in scene_binding_columns:
             conn.execute(text("ALTER TABLE external_api_scene_bindings ADD COLUMN custom_size_step INTEGER DEFAULT 8"))
+        if "estimated_seconds" not in scene_binding_columns:
+            conn.execute(text("ALTER TABLE external_api_scene_bindings ADD COLUMN estimated_seconds INTEGER NOT NULL DEFAULT 60"))
         if "max_reference_images" not in scene_binding_columns:
             conn.execute(text("ALTER TABLE external_api_scene_bindings ADD COLUMN max_reference_images INTEGER DEFAULT 0"))
         if "aspect_ratio_options_json" not in scene_binding_columns:
@@ -1990,11 +1995,121 @@ def _seed_default_data():
         db.close()
 
 
+def _ensure_chat_schema():
+    import secrets
+    import string
+    from datetime import datetime
+
+    inspector = inspect(engine)
+    table_names = set(inspector.get_table_names())
+    if "chat_external_api_configs" not in table_names:
+        from app.models.chat_external_api_config import ChatExternalApiConfig
+
+        ChatExternalApiConfig.__table__.create(bind=engine)
+        inspector = inspect(engine)
+        table_names = set(inspector.get_table_names())
+    if "chat_external_api_scene_bindings" not in table_names:
+        from app.models.chat_external_api_scene_binding import ChatExternalApiSceneBinding
+
+        ChatExternalApiSceneBinding.__table__.create(bind=engine)
+        inspector = inspect(engine)
+        table_names = set(inspector.get_table_names())
+    if "chat_sessions" not in table_names:
+        from app.models.chat_session import ChatSession
+
+        ChatSession.__table__.create(bind=engine)
+        inspector = inspect(engine)
+        table_names = set(inspector.get_table_names())
+    if "chat_messages" not in table_names:
+        from app.models.chat_message import ChatMessage
+
+        ChatMessage.__table__.create(bind=engine)
+        inspector = inspect(engine)
+    if "chat_messages" not in set(inspector.get_table_names()):
+        return
+
+    message_columns = {col["name"] for col in inspector.get_columns("chat_messages")}
+    message_indexes = {index["name"] for index in inspector.get_indexes("chat_messages")}
+    session_columns = {col["name"] for col in inspector.get_columns("chat_sessions")} if "chat_sessions" in set(inspector.get_table_names()) else set()
+    session_indexes = {index["name"] for index in inspector.get_indexes("chat_sessions")} if "chat_sessions" in set(inspector.get_table_names()) else set()
+    scene_table_names = set(inspector.get_table_names())
+    scene_columns = (
+        {col["name"] for col in inspector.get_columns("chat_external_api_scene_bindings")}
+        if "chat_external_api_scene_bindings" in scene_table_names
+        else set()
+    )
+    with engine.begin() as conn:
+        if "chat_external_api_scene_bindings" in scene_table_names and "starter_prompts_json" not in scene_columns:
+            conn.execute(
+                text(
+                    "ALTER TABLE chat_external_api_scene_bindings "
+                    "ADD COLUMN starter_prompts_json TEXT NULL"
+                )
+            )
+            default_starter_prompts = (
+                '[{"tag":"生图","text":"怎么样才能让 AI 生图更准确、更好看？有哪些关键方法和常见坑？"},'
+                '{"tag":"生图","text":"我想做电商产品图，白底运动鞋怎么拍出质感和卖点？"},'
+                '{"tag":"生图","text":"有一张人像照片，想改成赛博朋克风格，该怎么操作更稳？"},'
+                '{"tag":"生视频","text":"怎么样才能让 AI 生视频更稳、更自然？有哪些关键方法和常见坑？"}]'
+            )
+            conn.execute(
+                text(
+                    "UPDATE chat_external_api_scene_bindings "
+                    "SET starter_prompts_json = :prompts "
+                    "WHERE starter_prompts_json IS NULL OR starter_prompts_json = '' OR starter_prompts_json = '[]'"
+                ),
+                {"prompts": default_starter_prompts},
+            )
+        if "reply_to_message_id" not in message_columns:
+            conn.execute(text("ALTER TABLE chat_messages ADD COLUMN reply_to_message_id INTEGER NULL"))
+        if "provider_response_preview" not in message_columns:
+            conn.execute(text("ALTER TABLE chat_messages ADD COLUMN provider_response_preview TEXT NULL"))
+        if "images_json" not in message_columns:
+            conn.execute(text("ALTER TABLE chat_messages ADD COLUMN images_json TEXT NULL"))
+            conn.execute(text("UPDATE chat_messages SET images_json = '[]' WHERE images_json IS NULL"))
+        if "extra_json" not in message_columns:
+            conn.execute(text("ALTER TABLE chat_messages ADD COLUMN extra_json TEXT NULL"))
+        if "idx_chat_messages_reply_to" not in message_indexes:
+            conn.execute(text("CREATE INDEX idx_chat_messages_reply_to ON chat_messages (reply_to_message_id)"))
+        if "chat_sessions" in set(inspector.get_table_names()) and "session_id" not in session_columns:
+            conn.execute(text("ALTER TABLE chat_sessions ADD COLUMN session_id VARCHAR(16) NULL"))
+        if "chat_sessions" in set(inspector.get_table_names()):
+            rows = conn.execute(
+                text(
+                    "SELECT id, created_at FROM chat_sessions "
+                    "WHERE session_id IS NULL OR session_id = ''"
+                )
+            ).fetchall()
+            for row in rows:
+                row_id = int(row[0])
+                created_at = row[1]
+                stamp = created_at.strftime("%y%m%d%H%M%S") if created_at is not None else datetime.now().strftime("%y%m%d%H%M%S")
+                for _ in range(12):
+                    suffix = "".join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(4))
+                    candidate = f"{stamp}{suffix}"
+                    exists = conn.execute(
+                        text("SELECT id FROM chat_sessions WHERE session_id = :sid LIMIT 1"),
+                        {"sid": candidate},
+                    ).first()
+                    if exists:
+                        continue
+                    conn.execute(
+                        text("UPDATE chat_sessions SET session_id = :sid WHERE id = :id"),
+                        {"sid": candidate, "id": row_id},
+                    )
+                    break
+            if "uq_chat_sessions_session_id" not in session_indexes:
+                try:
+                    conn.execute(text("CREATE UNIQUE INDEX uq_chat_sessions_session_id ON chat_sessions (session_id)"))
+                except Exception:
+                    pass
+
+
 upload_path = Path(settings.UPLOAD_DIR)
 upload_path.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=str(upload_path)), name="uploads")
 
-from app.api import auth, tasks, images, history, admin, upload, api_key, templates, prompt_reverse, prompt_optimize, prompt_optimize_styles, generation_scene_categories, external_api_config, feedback, system_messages, user_api_keys, payment, user_assets, user_prompts, activities  # noqa: E402
+from app.api import auth, tasks, images, history, admin, upload, api_key, templates, prompt_reverse, prompt_optimize, prompt_optimize_styles, generation_scene_categories, external_api_config, chat_external_api_config, chat, feedback, system_messages, user_api_keys, payment, user_assets, user_prompts, activities  # noqa: E402
 app.include_router(auth.router)
 app.include_router(user_api_keys.router)
 app.include_router(templates.router)
@@ -2025,3 +2140,7 @@ app.include_router(generation_scene_categories.admin_router)
 app.include_router(external_api_config.router)
 app.include_router(external_api_config.scene_router)
 app.include_router(external_api_config.public_router)
+app.include_router(chat_external_api_config.router)
+app.include_router(chat_external_api_config.scene_router)
+app.include_router(chat_external_api_config.public_router)
+app.include_router(chat.router)

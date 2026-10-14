@@ -19,6 +19,12 @@ const router = createRouter({
           component: () => import("@/views/TemplatesView.vue"),
         },
         {
+          path: "chat/:sessionId?",
+          name: "Chat",
+          meta: { requiresAuth: true },
+          component: () => import("@/views/ChatView.vue"),
+        },
+        {
           path: "generate",
           name: "Generate",
           component: () => import("@/views/GenerateView.vue"),
@@ -167,6 +173,12 @@ const router = createRouter({
           props: { adminUserTasks: true },
         },
         {
+          path: "admin/user-conversations/:sessionId?",
+          name: "AdminUserConversations",
+          meta: { requiresAdmin: true },
+          component: () => import("@/views/admin/AdminUserConversationsView.vue"),
+        },
+        {
           path: "admin/overview",
           name: "AdminOverviewStats",
           meta: { requiresAdmin: true },
@@ -235,6 +247,12 @@ const router = createRouter({
           name: "GenerationSceneCategoryManage",
           meta: { requiresSuperAdmin: true },
           component: () => import("@/views/admin/GenerationSceneCategoryView.vue"),
+        },
+        {
+          path: "admin/chat-api-configs",
+          name: "ChatApiConfigManage",
+          meta: { requiresSuperAdmin: true },
+          component: () => import("@/views/admin/ChatApiConfigView.vue"),
         },
       ],
     },

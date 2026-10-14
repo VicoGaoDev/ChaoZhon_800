@@ -609,6 +609,7 @@ function toGenerationModelOption(scene: TaskSceneConfig): GenerationModelOption 
     custom_size_max: scene.custom_size_max,
     custom_size_step: scene.custom_size_step,
     credit_cost: scene.credit_cost,
+    estimated_seconds: scene.estimated_seconds,
     resolution_credit_costs: scene.resolution_credit_costs || {},
     max_reference_images: scene.max_reference_images,
     aspect_ratio_options: scene.aspect_ratio_options,

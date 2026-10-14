@@ -2,7 +2,9 @@ export type AdminConfigTemplateKind =
   | "image-api-config"
   | "image-scene-binding"
   | "video-api-config"
-  | "video-scene-binding";
+  | "video-scene-binding"
+  | "chat-api-config"
+  | "chat-scene-binding";
 
 export interface AdminConfigTemplateEnvelope<T = object> {
   banana_admin_template: true;
@@ -68,6 +70,8 @@ function isAdminConfigTemplateKind(value: string): value is AdminConfigTemplateK
     "image-scene-binding",
     "video-api-config",
     "video-scene-binding",
+    "chat-api-config",
+    "chat-scene-binding",
   ].includes(value);
 }
 
@@ -80,6 +84,9 @@ function inferTemplateKindFromPlainObject(data: Record<string, unknown>) {
     ) {
       return { kind: "video-api-config" as const, data };
     }
+    if (hasOwn(data, "result_text_field")) {
+      return { kind: "chat-api-config" as const, data };
+    }
     return { kind: "image-api-config" as const, data };
   }
 
@@ -91,6 +98,14 @@ function inferTemplateKindFromPlainObject(data: Record<string, unknown>) {
       || hasOwn(data, "hide_duration")
     ) {
       return { kind: "video-scene-binding" as const, data };
+    }
+    if (
+      hasOwn(data, "system_prompt")
+      || hasOwn(data, "context_message_limit")
+      || hasOwn(data, "opening_greeting")
+      || hasOwn(data, "starter_prompts")
+    ) {
+      return { kind: "chat-scene-binding" as const, data };
     }
     return { kind: "image-scene-binding" as const, data };
   }

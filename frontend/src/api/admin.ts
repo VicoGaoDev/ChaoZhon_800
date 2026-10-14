@@ -46,6 +46,16 @@ import type {
   GenerationSceneCategory,
   GenerationSceneCategoryPayload,
   GenerationSceneCategoryStatus,
+  ChatExternalApiConfig,
+  ChatExternalApiConfigPayload,
+  ChatExternalApiConfigTestResult,
+  ChatExternalApiSceneBinding,
+  ChatExternalApiSceneBindingCreatePayload,
+  ChatExternalApiSceneBindingMetaPayload,
+  ChatMessageListResponse,
+  ChatSession,
+  ChatSessionListResponse,
+  TaskResult,
 } from "@/types";
 
 function buildAnalyticsParams(query: AdminAnalyticsQuery): Record<string, unknown> {
@@ -523,6 +533,7 @@ export function updateExternalApiSceneBinding(
     api_config_id: number | null;
     backup_api_config_id: number | null;
     credit_cost: number;
+    estimated_seconds: number;
     resolution_credit_costs_json: string;
     display_name: string;
     subtitle: string;
@@ -533,4 +544,100 @@ export function updateExternalApiSceneBinding(
 
 export function testExternalApiConfig(payload: ExternalApiConfigPayload): Promise<ExternalApiConfigTestResult> {
   return client.post("/admin/external-api-configs/test", payload);
+}
+
+export function listAdminChatSessions(params?: {
+  page_size?: number;
+  keyword?: string;
+  user_id?: string;
+  before_session_id?: string;
+}): Promise<ChatSessionListResponse> {
+  return client.get("/admin/chat/sessions", { params });
+}
+
+export function getAdminChatSession(sessionId: string): Promise<ChatSession> {
+  return client.get(`/admin/chat/sessions/${encodeURIComponent(sessionId)}`);
+}
+
+export function listAdminChatMessages(
+  sessionId: string,
+  params?: { before_id?: number; page_size?: number },
+): Promise<ChatMessageListResponse> {
+  return client.get(`/admin/chat/sessions/${encodeURIComponent(sessionId)}/messages`, { params });
+}
+
+export function getAdminTasks(taskIds: string[]): Promise<TaskResult[]> {
+  const params = new URLSearchParams();
+  taskIds.forEach((taskId) => {
+    params.append("task_ids", String(taskId));
+  });
+  return client.get(`/admin/tasks?${params.toString()}`);
+}
+
+export function listChatExternalApiConfigs(): Promise<ChatExternalApiConfig[]> {
+  return client.get("/admin/chat-external-api-configs");
+}
+
+export function createChatExternalApiConfig(payload: ChatExternalApiConfigPayload): Promise<ChatExternalApiConfig> {
+  return client.post("/admin/chat-external-api-configs", payload);
+}
+
+export function updateChatExternalApiConfig(configId: number, payload: ChatExternalApiConfigPayload): Promise<ChatExternalApiConfig> {
+  return client.put(`/admin/chat-external-api-configs/${configId}`, payload);
+}
+
+export function updateChatExternalApiConfigStatus(configId: number, status: ExternalApiConfigStatus): Promise<ChatExternalApiConfig> {
+  return client.patch(`/admin/chat-external-api-configs/${configId}/status`, { status });
+}
+
+export function deleteChatExternalApiConfig(configId: number): Promise<void> {
+  return client.delete(`/admin/chat-external-api-configs/${configId}`);
+}
+
+export function listChatExternalApiSceneBindings(): Promise<ChatExternalApiSceneBinding[]> {
+  return client.get("/admin/chat-external-api-scene-bindings");
+}
+
+export function createChatExternalApiSceneBinding(
+  payload: ChatExternalApiSceneBindingCreatePayload,
+): Promise<ChatExternalApiSceneBinding> {
+  return client.post("/admin/chat-external-api-scene-bindings", payload);
+}
+
+export function updateChatExternalApiSceneBindingMeta(
+  sceneKey: ChatExternalApiSceneBinding["scene_key"],
+  payload: ChatExternalApiSceneBindingMetaPayload,
+): Promise<ChatExternalApiSceneBinding> {
+  return client.patch(`/admin/chat-external-api-scene-bindings/${sceneKey}/meta`, payload);
+}
+
+export function updateChatExternalApiSceneBindingStatus(
+  sceneKey: ChatExternalApiSceneBinding["scene_key"],
+  status: ExternalApiConfigStatus,
+): Promise<ChatExternalApiSceneBinding> {
+  return client.patch(`/admin/chat-external-api-scene-bindings/${sceneKey}/status`, { status });
+}
+
+export function deleteChatExternalApiSceneBinding(
+  sceneKey: ChatExternalApiSceneBinding["scene_key"],
+): Promise<void> {
+  return client.delete(`/admin/chat-external-api-scene-bindings/${sceneKey}`);
+}
+
+export function updateChatExternalApiSceneBinding(
+  sceneKey: ChatExternalApiSceneBinding["scene_key"],
+  payload: {
+    api_config_id: number | null;
+    backup_api_config_id: number | null;
+    credit_cost: number;
+    display_name: string;
+    subtitle: string;
+    status: ExternalApiConfigStatus;
+  },
+): Promise<ChatExternalApiSceneBinding> {
+  return client.put(`/admin/chat-external-api-scene-bindings/${sceneKey}`, payload);
+}
+
+export function testChatExternalApiConfig(payload: ChatExternalApiConfigPayload): Promise<ChatExternalApiConfigTestResult> {
+  return client.post("/admin/chat-external-api-configs/test", payload);
 }

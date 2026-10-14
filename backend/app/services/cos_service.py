@@ -19,6 +19,7 @@ USER_ASSET_PREFIX = "user_assets"
 REFERENCE_MAX_UPLOAD_SIZE = 20 * 1024 * 1024  # 20 MB
 UPLOAD_PURPOSE_PREFIXES = {
     "ref": "ref",
+    "chat": "chat",
     "source": "source",
     "mask": "mask",
     "reverse": "reverse",
@@ -36,7 +37,7 @@ PUT_OBJECT_ACTIONS = [
 
 
 def get_upload_size_limit(purpose: str) -> int:
-    if purpose in {"ref", "activity"}:
+    if purpose in {"ref", "chat", "activity"}:
         return REFERENCE_MAX_UPLOAD_SIZE
     return MAX_UPLOAD_SIZE
 

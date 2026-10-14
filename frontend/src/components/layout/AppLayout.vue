@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onBeforeUnmount, h, provide, nextTick, watch, type Component } from "vue";
+import { ref, reactive, computed, defineAsyncComponent, onMounted, onBeforeUnmount, h, provide, nextTick, watch, type Component } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { useAuthStore } from "@/stores/auth";
 import { message, notification } from "ant-design-vue";
@@ -36,6 +36,10 @@ import {
   subscribeUnreadSystemMessageCount,
 } from "@/lib/systemMessageNotice";
 import { subscribeAuthSessionExpired } from "@/lib/authSessionNotice";
+import {
+  isAiAssistantDockTabEnabled,
+  subscribeAiAssistantDockTabEnabled,
+} from "@/lib/aiAssistantDock";
 import { APP_THEME_ATTRIBUTE, type AppThemeName } from "@/config/theme";
 import { getCurrentTheme } from "@/lib/theme";
 import NavGenerateImageIcon from "@/components/icons/NavGenerateImageIcon.vue";
@@ -63,6 +67,7 @@ import {
   MenuOutlined,
   MailOutlined,
   MessageOutlined,
+  CommentOutlined,
   GiftOutlined,
   AccountBookOutlined,
   CheckOutlined,
@@ -87,6 +92,7 @@ const canManagePromoCodes = computed(() => auth.user?.is_whitelisted === true);
 const routeOrder = new Map<string, number>([
   ["/", 0],
   ["/templates", 1],
+  ["/chat", 1.5],
   ["/generate", 2],
   ["/history", 3],
   ["/profile", 4],
@@ -103,6 +109,7 @@ const routeOrder = new Map<string, number>([
   ["/admin/prompt-optimize", 14.5],
   ["/admin/users", 15],
   ["/admin/user-tasks", 16],
+  ["/admin/user-conversations", 16.2],
   ["/admin/overview", 16.5],
   ["/admin/dashboard", 17],
   ["/admin/error-analytics", 18],
@@ -119,6 +126,7 @@ const routeOrder = new Map<string, number>([
   ["/admin/cos-config", 28],
   ["/admin/external-api-configs", 29],
   ["/admin/generation-scene-categories", 29.5],
+  ["/admin/chat-api-configs", 29.8],
 ]);
 
 const currentTheme = ref<AppThemeName>(getCurrentTheme());
@@ -144,8 +152,19 @@ type PrimaryMenuItem = {
   icon?: Component;
 };
 
+const AiAssistantDock = defineAsyncComponent(() => import("@/components/chat/AiAssistantDock.vue"));
+const aiAssistantDockTabEnabled = ref(isAiAssistantDockTabEnabled());
+let unsubscribeAiAssistantDockTabEnabled: (() => void) | null = null;
+const showAiAssistantDock = computed(() => {
+  if (!aiAssistantDockTabEnabled.value) return false;
+  if (route.path.startsWith("/admin")) return false;
+  const path = route.path;
+  return path.startsWith("/generate") || path.startsWith("/templates") || path.startsWith("/history");
+});
+
 const primaryMenuItems: PrimaryMenuItem[] = [
   { key: "templates", label: "创意模版", iconSrc: withBaseUrl("nav-templates.svg"), darkIconSrc: withBaseUrl("nav-templates-mono.svg"), icon: BulbOutlined },
+  { key: "chat", label: "AI 对话", iconSrc: withBaseUrl("nav-generate.svg"), icon: MessageOutlined },
   { key: "generate", label: "AI 生图", iconSrc: withBaseUrl("nav-generate.svg"), icon: NavGenerateImageIcon },
   { key: "history", label: "历史图片", iconSrc: withBaseUrl("nav-history.svg"), darkIconSrc: withBaseUrl("nav-history-mono.svg"), icon: ClockCircleOutlined },
 ];
@@ -202,6 +221,7 @@ const adminMenuItems = computed(() =>
     { key: "/admin/prompt-optimize", label: "提示词优化", icon: ThunderboltOutlined, superAdminOnly: false },
     { key: "/admin/users", label: "用户管理", icon: TeamOutlined, superAdminOnly: false },
     { key: "/admin/user-tasks", label: "用户任务", icon: PictureOutlined, superAdminOnly: false },
+    { key: "/admin/user-conversations", label: "用户对话", icon: CommentOutlined, superAdminOnly: false },
     { key: "/admin/overview", label: "固定概览", icon: DashboardOutlined, superAdminOnly: false },
     { key: "/admin/dashboard", label: "数据统计", icon: BarChartOutlined, superAdminOnly: false },
     { key: "/admin/error-analytics", label: "错误统计", icon: BugOutlined, superAdminOnly: false },
@@ -215,6 +235,7 @@ const adminMenuItems = computed(() =>
     { key: "/admin/cos-config", label: "COS 配置", icon: CloudUploadOutlined, superAdminOnly: true },
     { key: "/admin/external-api-configs", label: "接口管理", icon: KeyOutlined, superAdminOnly: true },
     { key: "/admin/generation-scene-categories", label: "生图分类", icon: TagsOutlined, superAdminOnly: true },
+    { key: "/admin/chat-api-configs", label: "对话接口", icon: MessageOutlined, superAdminOnly: true },
   ].filter((item) => !item.superAdminOnly || isSuperAdmin.value)
 );
 const adminMenuGroups = computed(() =>
@@ -229,7 +250,7 @@ const adminMenuGroups = computed(() =>
       key: "admin-users",
       label: "用户数据",
       icon: TeamOutlined,
-      itemKeys: ["/admin/users", "/admin/user-tasks", "/admin/feedbacks", "/admin/system-messages"],
+      itemKeys: ["/admin/users", "/admin/user-tasks", "/admin/user-conversations", "/admin/feedbacks", "/admin/system-messages"],
     },
     {
       key: "admin-analytics",
@@ -241,7 +262,7 @@ const adminMenuGroups = computed(() =>
       key: "admin-third-party",
       label: "第三方管理",
       icon: KeyOutlined,
-      itemKeys: ["/admin/general-settings", "/admin/activities", "/admin/cos-config", "/admin/external-api-configs", "/admin/generation-scene-categories"],
+      itemKeys: ["/admin/general-settings", "/admin/activities", "/admin/cos-config", "/admin/external-api-configs", "/admin/generation-scene-categories", "/admin/chat-api-configs"],
     },
   ].map((group) => ({
     ...group,
@@ -278,6 +299,8 @@ function getRouteRank(path: string) {
   if (path.startsWith("/feedbacks/")) return routeOrder.get("/feedbacks/:feedbackId") ?? 0;
   if (path.startsWith("/system-messages/")) return routeOrder.get("/system-messages/:messageId") ?? 0;
   if (path.startsWith("/admin/feedbacks/")) return routeOrder.get("/admin/feedbacks/:feedbackId") ?? 0;
+  if (path.startsWith("/chat")) return routeOrder.get("/chat") ?? 0;
+  if (path.startsWith("/admin/user-conversations")) return routeOrder.get("/admin/user-conversations") ?? 0;
   return routeOrder.get(path) ?? 0;
 }
 
@@ -286,6 +309,7 @@ const selectedKeys = computed(() => {
   if (p.startsWith("/admin")) return ["admin"];
   if (p === "/") return [];
   if (p === "/templates") return ["templates"];
+  if (p.startsWith("/chat")) return ["chat"];
   if (p === "/batch-generate") return ["batch-generate"];
   if (p === "/history") return ["history"];
   if (
@@ -304,6 +328,7 @@ const selectedKeys = computed(() => {
 const adminSelectedKeys = computed(() => {
   if (!route.path.startsWith("/admin")) return [];
   if (route.path.startsWith("/admin/feedbacks")) return ["/admin/feedbacks"];
+  if (route.path.startsWith("/admin/user-conversations")) return ["/admin/user-conversations"];
   return [route.path];
 });
 
@@ -329,6 +354,13 @@ watch(
 function handleMenuClick({ key }: { key: string }) {
   mobileDrawerOpen.value = false;
   if (key === "templates") router.push("/templates");
+  else if (key === "chat") {
+    if (!auth.isLoggedIn) {
+      loginModalVisible.value = true;
+      return;
+    }
+    router.push("/chat");
+  }
   else if (key === "generate") {
     window.dispatchEvent(new CustomEvent(GENERATE_MENU_ENTRY_EVENT));
     router.push("/generate");
@@ -976,6 +1008,9 @@ onMounted(async () => {
     userUnreadSystemMessageCount.value = count;
   });
   unsubscribeAuthSessionExpired = subscribeAuthSessionExpired(handleAuthSessionExpired);
+  unsubscribeAiAssistantDockTabEnabled = subscribeAiAssistantDockTabEnabled((enabled) => {
+    aiAssistantDockTabEnabled.value = enabled;
+  });
 
   if (typeof document !== "undefined") {
     themeObserver = new MutationObserver(() => {
@@ -1018,6 +1053,8 @@ onBeforeUnmount(() => {
   unsubscribeSystemMessageCount = null;
   unsubscribeAuthSessionExpired?.();
   unsubscribeAuthSessionExpired = null;
+  unsubscribeAiAssistantDockTabEnabled?.();
+  unsubscribeAiAssistantDockTabEnabled = null;
   stopSystemMessagePolling();
   themeObserver?.disconnect();
   themeObserver = null;
@@ -2108,6 +2145,8 @@ watch(purchaseDialogOpen, (open) => {
         </div>
       </a-form>
     </a-modal>
+
+    <AiAssistantDock v-if="showAiAssistantDock" />
 
     <ActivityPromotion
       v-if="activeActivity"
@@ -3641,11 +3680,13 @@ html:is([data-theme="dark"], [data-theme="midnight"]) .warm-dropdown .ant-dropdo
     display: none;
   }
 
-  .app-content-desktop-side-nav:has(.generate-page) {
+  .app-content-desktop-side-nav:has(.generate-page),
+  .app-content-desktop-side-nav:has(.chat-page) {
     padding: 12px 16px 16px;
   }
 
-  .app-content-desktop-side-nav:has(.generate-page) .content-inner {
+  .app-content-desktop-side-nav:has(.generate-page) .content-inner,
+  .app-content-desktop-side-nav:has(.chat-page) .content-inner {
     max-width: none;
   }
 }
@@ -4075,7 +4116,8 @@ html:is([data-theme="dark"], [data-theme="midnight"]) .admin-cascade-submenu .an
 }
 
 @media (min-width: 961px) {
-  .app-layout-desktop-side-nav .generate-page {
+  .app-layout-desktop-side-nav .generate-page,
+  .app-layout-desktop-side-nav .content-inner .chat-page {
     min-height: calc(100dvh - 44px) !important;
     height: calc(100dvh - 44px) !important;
   }

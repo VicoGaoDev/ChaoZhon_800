@@ -10,6 +10,28 @@ RequestFormatType = Literal["json", "multipart"]
 SceneTypeType = Literal["generate", "image_edit", "prompt_reverse", "prompt_optimize", "inpaint"]
 SceneKeyType = str
 
+DEFAULT_ESTIMATED_SECONDS = 60
+MIN_ESTIMATED_SECONDS = 5
+MAX_ESTIMATED_SECONDS = 1800
+
+
+def normalize_estimated_seconds(value: int | None) -> int:
+    try:
+        seconds = int(value or 0)
+    except (TypeError, ValueError):
+        seconds = 0
+    if seconds < MIN_ESTIMATED_SECONDS:
+        return DEFAULT_ESTIMATED_SECONDS
+    return min(seconds, MAX_ESTIMATED_SECONDS)
+
+
+def _validate_estimated_seconds(value: int | None) -> int | None:
+    if value is None:
+        return None
+    if value < MIN_ESTIMATED_SECONDS or value > MAX_ESTIMATED_SECONDS:
+        raise ValueError("平均生成时间需为 5 到 1800 秒")
+    return value
+
 
 def _validate_json_text(value: str, field_name: str, *, expect_object: bool) -> str:
     raw = (value or "").strip() or ("{}" if expect_object else "{}")
@@ -21,6 +43,30 @@ def _validate_json_text(value: str, field_name: str, *, expect_object: bool) -> 
     if expect_object and not isinstance(parsed, dict):
         raise ValueError(f"{field_name} 必须是 JSON 对象")
     return json.dumps(parsed, ensure_ascii=False, indent=2)
+
+
+def _validate_integer_list_json(value: str, field_name: str) -> str:
+    raw = (value or "").strip() or "[]"
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{field_name} 必须是合法 JSON: {exc.msg}") from exc
+
+    if not isinstance(parsed, list):
+        raise ValueError(f"{field_name} 必须是 JSON 数组")
+
+    normalized: list[int] = []
+    for index, item in enumerate(parsed, start=1):
+        if isinstance(item, bool):
+            raise ValueError(f"{field_name} 第 {index} 项必须是整数")
+        try:
+            normalized_value = int(item)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{field_name} 第 {index} 项必须是整数") from exc
+        if normalized_value < 100 or normalized_value > 599:
+            raise ValueError(f"{field_name} 第 {index} 项必须是合法 HTTP 状态码")
+        normalized.append(normalized_value)
+    return json.dumps(normalized, ensure_ascii=False, indent=2)
 
 
 def _validate_scene_options_json(value: str, field_name: str) -> str:
@@ -232,6 +278,7 @@ class GenerationModelOptionOut(BaseModel):
     custom_size_max: int = 3840
     custom_size_step: int = 8
     credit_cost: int
+    estimated_seconds: int = DEFAULT_ESTIMATED_SECONDS
     resolution_credit_costs: dict[str, int] = {}
     max_reference_images: int = 0
     aspect_ratio_options: list["SceneOptionItem"] = []
@@ -263,6 +310,7 @@ class ExternalApiSceneBindingCreate(BaseModel):
     display_name: str = ""
     subtitle: str = ""
     credit_cost: int
+    estimated_seconds: int = DEFAULT_ESTIMATED_SECONDS
     max_reference_images: int = 0
     scene_type: SceneTypeType = "generate"
     status: StatusType = "enabled"
@@ -300,6 +348,12 @@ class ExternalApiSceneBindingCreate(BaseModel):
         if value < 0:
             raise ValueError("积分消耗不能小于 0")
         return value
+
+    @field_validator("estimated_seconds")
+    @classmethod
+    def validate_estimated_seconds(cls, value: int) -> int:
+        validated = _validate_estimated_seconds(value)
+        return DEFAULT_ESTIMATED_SECONDS if validated is None else validated
 
     @field_validator("max_reference_images")
     @classmethod
@@ -358,6 +412,7 @@ class ExternalApiSceneBindingUpdate(BaseModel):
     display_name: str = ""
     subtitle: str = ""
     credit_cost: int
+    estimated_seconds: int | None = None
     resolution_credit_costs_json: str = "{}"
 
     @field_validator("display_name", "subtitle")
@@ -371,6 +426,11 @@ class ExternalApiSceneBindingUpdate(BaseModel):
         if value < 0:
             raise ValueError("积分消耗不能小于 0")
         return value
+
+    @field_validator("estimated_seconds")
+    @classmethod
+    def validate_estimated_seconds(cls, value: int | None) -> int | None:
+        return _validate_estimated_seconds(value)
 
     @field_validator("resolution_credit_costs_json")
     @classmethod
@@ -390,6 +450,7 @@ class ExternalApiSceneBindingMetaUpdate(BaseModel):
     custom_size_max: int = 3840
     custom_size_step: int = 8
     max_reference_images: int = 0
+    estimated_seconds: int | None = None
     aspect_ratio_options_json: str = "[]"
     image_size_options_json: str = "[]"
     custom_size_options_json: str = "[]"
@@ -427,6 +488,11 @@ class ExternalApiSceneBindingMetaUpdate(BaseModel):
         if value < 0:
             raise ValueError("最大参考图张数不能小于 0")
         return value
+
+    @field_validator("estimated_seconds")
+    @classmethod
+    def validate_meta_estimated_seconds(cls, value: int | None) -> int | None:
+        return _validate_estimated_seconds(value)
 
     @model_validator(mode="after")
     def validate_custom_size_limits(self):
@@ -501,6 +567,7 @@ class ExternalApiSceneBindingOut(BaseModel):
     backup_api_group_name: str = ""
     backup_api_status: StatusType | None = None
     credit_cost: int
+    estimated_seconds: int = DEFAULT_ESTIMATED_SECONDS
     max_reference_images: int
     aspect_ratio_options_json: str
     image_size_options_json: str
@@ -524,6 +591,7 @@ class TaskSceneConfigOut(BaseModel):
     custom_size_max: int
     custom_size_step: int
     credit_cost: int
+    estimated_seconds: int = DEFAULT_ESTIMATED_SECONDS
     resolution_credit_costs: dict[str, int]
     max_reference_images: int
     aspect_ratio_options: list[SceneOptionItem]

@@ -20,7 +20,9 @@ from app.schemas.feedback import (
     FeedbackUnresolvedCountResponse,
     FeedbackUpdateRequest,
 )
+from app.schemas.chat import ChatMessageListOut, ChatSessionAdminListOut, ChatSessionAdminOut
 from app.schemas.history import HistoryResponse, UserHistoryCardItem, UserHistoryResponse
+from app.schemas.task import TaskOut
 from app.services.business_id_service import get_user_by_business_id
 from app.services.admin_service import (
     create_user, list_users, list_users_page, list_user_options, get_user_detail, update_user_status, update_user_role,
@@ -43,7 +45,10 @@ from app.services.feedback_service import (
     list_feedbacks,
     update_feedback,
 )
+from app.services.chat_service import get_admin_session, list_admin_messages, list_admin_sessions
 from app.services.history_service import get_admin_history_cards, get_admin_history_detail, get_all_history
+from app.services.image_delivery_service import get_optional_cos_config, serialize_task
+from app.services.task_service import get_task_details
 from app.services.api_alert_service import ApiAlertRunResult, execute_api_alerts
 from app.services.payment_reconcile_scheduler import (
     get_manual_payment_reconcile_status,
@@ -303,6 +308,60 @@ def admin_get_payment_order_reconcile_scan_status(
     _user: User = Depends(require_admin),
 ):
     return get_manual_payment_reconcile_status(run_id)
+
+
+@router.get("/chat/sessions", response_model=ChatSessionAdminListOut)
+def admin_list_chat_sessions(
+    page_size: int = Query(50, ge=1, le=100),
+    keyword: str | None = Query(None),
+    user_id: str | None = Query(None),
+    before_session_id: str | None = Query(None),
+    _user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    return list_admin_sessions(
+        db,
+        page_size=page_size,
+        keyword=keyword,
+        user_id=_resolve_optional_user_id(db, user_id),
+        before_session_id=before_session_id,
+    )
+
+
+@router.get("/chat/sessions/{session_id}", response_model=ChatSessionAdminOut)
+def admin_get_chat_session(
+    session_id: str,
+    _user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    return get_admin_session(db, session_id)
+
+
+@router.get("/chat/sessions/{session_id}/messages", response_model=ChatMessageListOut)
+def admin_list_chat_messages(
+    session_id: str,
+    before_id: int | None = Query(None, ge=1),
+    page_size: int = Query(50, ge=1, le=100),
+    _user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    return list_admin_messages(
+        db,
+        session_id,
+        before_id=before_id,
+        page_size=page_size,
+    )
+
+
+@router.get("/tasks", response_model=list[TaskOut])
+def admin_get_tasks(
+    task_ids: list[str] = Query(default=[]),
+    _user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    tasks = [task for task in get_task_details(db, task_ids) if not task.is_deleted]
+    cos_config = get_optional_cos_config(db)
+    return [serialize_task(task, cos_config=cos_config) for task in tasks]
 
 
 @router.get("/stats", response_model=StatsOut)

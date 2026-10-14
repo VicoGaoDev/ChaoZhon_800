@@ -27,6 +27,10 @@ from app.models.history_pin import HistoryPin
 from app.models.feedback import Feedback
 from app.models.system_message import SystemMessage, SystemMessageRecipient
 from app.models.activity import Activity
+from app.models.chat_external_api_config import ChatExternalApiConfig
+from app.models.chat_external_api_scene_binding import ChatExternalApiSceneBinding
+from app.models.chat_session import ChatSession
+from app.models.chat_message import ChatMessage
 from app.models.template import Template
 from app.models.template_tag import TemplateTag
 from app.models.template_tag_relation import TemplateTagRelation
@@ -62,6 +66,10 @@ __all__ = [
     "SystemMessage",
     "SystemMessageRecipient",
     "Activity",
+    "ChatExternalApiConfig",
+    "ChatExternalApiSceneBinding",
+    "ChatSession",
+    "ChatMessage",
     "Template",
     "TemplateTag",
     "TemplateTagRelation",

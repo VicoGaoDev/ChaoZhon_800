@@ -1136,6 +1136,7 @@ export interface ExternalApiSceneBinding {
   backup_api_group_name: string;
   backup_api_status?: ExternalApiConfigStatus | null;
   credit_cost: number;
+  estimated_seconds: number;
   resolution_credit_costs_json: string;
   max_reference_images: number;
   aspect_ratio_options_json: string;
@@ -1161,6 +1162,7 @@ export interface ExternalApiSceneBindingCreatePayload {
   display_name: string;
   subtitle: string;
   credit_cost: number;
+  estimated_seconds: number;
   max_reference_images: number;
   aspect_ratio_options_json: string;
   image_size_options_json: string;
@@ -1181,6 +1183,7 @@ export interface ExternalApiSceneBindingMetaPayload {
   custom_size_max: number;
   custom_size_step: number;
   max_reference_images: number;
+  estimated_seconds: number;
   aspect_ratio_options_json: string;
   image_size_options_json: string;
   custom_size_options_json: string;
@@ -1209,6 +1212,7 @@ export interface GenerationModelOption {
   custom_size_max: number;
   custom_size_step: number;
   credit_cost: number;
+  estimated_seconds: number;
   resolution_credit_costs: Record<string, number>;
   max_reference_images: number;
   aspect_ratio_options: SceneOptionItem[];
@@ -1234,6 +1238,7 @@ export interface TaskSceneConfig {
   custom_size_max: number;
   custom_size_step: number;
   credit_cost: number;
+  estimated_seconds: number;
   resolution_credit_costs: Record<string, number>;
   max_reference_images: number;
   aspect_ratio_options: SceneOptionItem[];
@@ -1241,7 +1246,10 @@ export interface TaskSceneConfig {
   custom_size_options: SceneOptionItem[];
   category_id?: number | null;
   category_name?: string | null;
+  category_description?: string | null;
   category_sort_order?: number | null;
+  badge_text?: string | null;
+  badge_color?: string | null;
 }
 
 export type ActivityStatus = "enabled" | "disabled";
@@ -1270,7 +1278,7 @@ export interface ActivityPayload {
   sort_order: number;
 }
 
-export type UploadPurpose = "ref" | "source" | "mask" | "reverse" | "misc" | "activity" | "template";
+export type UploadPurpose = "ref" | "chat" | "source" | "mask" | "reverse" | "misc" | "activity" | "template";
 
 export interface UploadCredential {
   bucket: string;
@@ -1322,4 +1330,187 @@ export interface UserAssetUploadSessionResponse {
 export interface UserAssetImportResponse {
   asset: UserAsset;
   quota: UserAssetQuota;
+}
+
+export interface ChatExternalApiConfig {
+  id: number;
+  name: string;
+  description: string;
+  group_name: string;
+  request_url: string;
+  request_format: "json";
+  headers_json: string;
+  payload_json: string;
+  response_json: string;
+  result_text_field: string;
+  result_error_field: string;
+  call_mode: "sync";
+  submit_success_statuses_json: string;
+  status: ExternalApiConfigStatus;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface ChatExternalApiConfigPayload {
+  name: string;
+  description: string;
+  group_name: string;
+  request_url: string;
+  request_format: "json";
+  headers_json: string;
+  payload_json: string;
+  response_json: string;
+  result_text_field: string;
+  result_error_field: string;
+  call_mode: "sync";
+  submit_success_statuses_json: string;
+  status: ExternalApiConfigStatus;
+}
+
+export interface ChatStarterPrompt {
+  tag: string;
+  text: string;
+  image_url?: string;
+}
+
+export interface ChatExternalApiSceneBinding {
+  scene_key: string;
+  scene_label: string;
+  scene_description: string;
+  display_name: string;
+  subtitle: string;
+  sort_order: number;
+  status: ExternalApiConfigStatus;
+  api_config_id?: number | null;
+  api_config_name: string;
+  api_group_name: string;
+  api_status?: ExternalApiConfigStatus | null;
+  backup_api_config_id?: number | null;
+  backup_api_config_name: string;
+  backup_api_group_name: string;
+  backup_api_status?: ExternalApiConfigStatus | null;
+  credit_cost: number;
+  system_prompt: string;
+  context_message_limit: number;
+  opening_greeting: string;
+  starter_prompts: ChatStarterPrompt[];
+}
+
+export interface ChatExternalApiSceneBindingCreatePayload {
+  scene_key: string;
+  scene_label: string;
+  scene_description: string;
+  sort_order: number;
+  api_config_id: number | null;
+  backup_api_config_id: number | null;
+  display_name: string;
+  subtitle: string;
+  credit_cost: number;
+  system_prompt: string;
+  context_message_limit: number;
+  opening_greeting: string;
+  starter_prompts: ChatStarterPrompt[];
+  status: ExternalApiConfigStatus;
+}
+
+export interface ChatExternalApiSceneBindingMetaPayload {
+  scene_key?: string;
+  scene_label: string;
+  scene_description: string;
+  sort_order: number;
+  credit_cost: number;
+  system_prompt: string;
+  context_message_limit: number;
+  opening_greeting: string;
+  starter_prompts: ChatStarterPrompt[];
+}
+
+export interface ChatExternalApiConfigTestResult {
+  success: boolean;
+  request_url: string;
+  status_code?: number | null;
+  response_preview: string;
+  extracted_text?: string;
+}
+
+export interface ChatGenerationModelOption {
+  model_key: string;
+  model_label: string;
+  model_description: string;
+  display_name: string;
+  subtitle: string;
+  sort_order: number;
+  credit_cost: number;
+  opening_greeting: string;
+  starter_prompts: ChatStarterPrompt[];
+  stream?: boolean;
+}
+
+export interface ChatSession {
+  id: string;
+  title: string;
+  model: string;
+  last_message_at?: string | null;
+  created_at: string;
+  updated_at?: string | null;
+  user_id?: string;
+  username?: string;
+  avatar_url?: string;
+  credit_cost?: number;
+}
+
+export interface ChatSessionListResponse {
+  items: ChatSession[];
+  total: number;
+  page: number;
+  page_size: number;
+  has_more: boolean;
+  next_before_session_id?: string | null;
+}
+
+export interface ChatImage {
+  url: string;
+}
+
+export interface ChatGenerateInfo {
+  status: "pending_confirm" | "running" | "success" | "failed" | "cancelled" | string;
+  prompt: string;
+  num_images: number;
+  reference_images: string[];
+  mode_hint: "generate" | "image_edit" | string;
+  model?: string;
+  size?: string;
+  resolution?: string;
+  custom_size?: string;
+  task_ids: string[];
+  error_message?: string;
+}
+
+export interface ChatMessage {
+  id: number;
+  session_id: string;
+  role: "user" | "assistant" | "system" | string;
+  content: string;
+  images?: ChatImage[];
+  generate?: ChatGenerateInfo | null;
+  model: string;
+  client_message_id?: string | null;
+  credit_cost: number;
+  status: string;
+  error_message: string;
+  created_at: string;
+}
+
+export interface ChatMessageListResponse {
+  items: ChatMessage[];
+  has_more: boolean;
+  next_before_id?: number | null;
+}
+
+export interface ChatSendMessageResponse {
+  user_message: ChatMessage;
+  assistant_message: ChatMessage;
+  credit_cost: number;
+  balance?: number | null;
+  session: ChatSession;
 }

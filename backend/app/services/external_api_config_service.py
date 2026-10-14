@@ -23,6 +23,7 @@ from app.schemas.external_api_config import (
     GenerationModelOptionOut,
     RenderedExternalApiConfig,
     TaskSceneConfigOut,
+    normalize_estimated_seconds,
 )
 from app.services.cos_service import load_image_bytes
 from app.services.generation_scene_category_service import build_scene_category_map
@@ -515,6 +516,7 @@ def _serialize_scene_binding(
         backup_api_group_name=backup_config.group_name if backup_config else "",
         backup_api_status=backup_config.status if backup_config else None,
         credit_cost=binding.credit_cost,
+        estimated_seconds=normalize_estimated_seconds(binding.estimated_seconds),
         max_reference_images=max(0, int(binding.max_reference_images or 0)),
         aspect_ratio_options_json=aspect_ratio_options_json,
         image_size_options_json=image_size_options_json,
@@ -564,6 +566,7 @@ def list_generation_models(db: Session) -> list[GenerationModelOptionOut]:
             custom_size_max=max(1, int(binding.custom_size_max or 3840)),
             custom_size_step=max(1, int(binding.custom_size_step or 8)),
             credit_cost=binding.credit_cost,
+            estimated_seconds=normalize_estimated_seconds(binding.estimated_seconds),
             resolution_credit_costs=_normalize_resolution_credit_costs(binding.resolution_credit_costs_json),
             max_reference_images=max(0, int(binding.max_reference_images or 0)),
             aspect_ratio_options=json.loads(binding.aspect_ratio_options_json or "[]"),
@@ -707,6 +710,7 @@ def list_public_task_scene_configs(db: Session) -> list[TaskSceneConfigOut]:
             custom_size_max=item.custom_size_max,
             custom_size_step=item.custom_size_step,
             credit_cost=item.credit_cost,
+            estimated_seconds=item.estimated_seconds,
             resolution_credit_costs=_normalize_resolution_credit_costs(item.resolution_credit_costs_json),
             max_reference_images=item.max_reference_images,
             aspect_ratio_options=json.loads(item.aspect_ratio_options_json or "[]"),
@@ -755,6 +759,7 @@ def create_scene_binding(
         display_name=body.display_name,
         subtitle=body.subtitle,
         credit_cost=body.credit_cost,
+        estimated_seconds=body.estimated_seconds,
         max_reference_images=body.max_reference_images,
         aspect_ratio_options_json=body.aspect_ratio_options_json,
         image_size_options_json=body.image_size_options_json,
@@ -812,6 +817,8 @@ def set_scene_binding(
     binding.display_name = body.display_name
     binding.subtitle = body.subtitle
     binding.credit_cost = body.credit_cost
+    if body.estimated_seconds is not None:
+        binding.estimated_seconds = body.estimated_seconds
     binding.resolution_credit_costs_json = body.resolution_credit_costs_json
     db.commit()
     return _serialize_scene_binding(binding, primary_config, backup_config)
@@ -845,6 +852,8 @@ def update_scene_binding_meta(
     binding.custom_size_max = body.custom_size_max
     binding.custom_size_step = body.custom_size_step
     binding.max_reference_images = body.max_reference_images
+    if body.estimated_seconds is not None:
+        binding.estimated_seconds = body.estimated_seconds
     binding.aspect_ratio_options_json = body.aspect_ratio_options_json
     binding.image_size_options_json = body.image_size_options_json
     binding.custom_size_options_json = body.custom_size_options_json
@@ -1058,6 +1067,54 @@ def _stringify_form_value(value: Any) -> str:
     if isinstance(value, (int, float, str)):
         return str(value)
     return json.dumps(value, ensure_ascii=False)
+
+
+def parse_http_statuses_json(raw: str | None) -> list[int]:
+    candidate = (raw or "").strip() or "[]"
+    try:
+        parsed = json.loads(candidate)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    normalized: list[int] = []
+    for item in parsed:
+        if isinstance(item, bool):
+            continue
+        try:
+            value = int(item)
+        except (TypeError, ValueError):
+            continue
+        if 100 <= value <= 599:
+            normalized.append(value)
+    return normalized
+
+
+def split_response_path(field_path: str) -> list[str]:
+    normalized = re.sub(r"\[(\d+)\]", r".\1", (field_path or "").strip()).strip(".")
+    return [segment for segment in normalized.split(".") if segment]
+
+
+def read_value_by_path(payload: object, field_path: str) -> tuple[object | None, object | None]:
+    current = payload
+    parent: object | None = None
+    for segment in split_response_path(field_path):
+        parent = current
+        if isinstance(current, dict):
+            if segment not in current:
+                return None, parent
+            current = current[segment]
+            continue
+        if isinstance(current, list):
+            if not segment.isdigit():
+                return None, parent
+            index = int(segment)
+            if index < 0 or index >= len(current):
+                return None, parent
+            current = current[index]
+            continue
+        return None, parent
+    return current, parent
 
 
 def should_use_multipart_request(rendered: RenderedExternalApiConfig) -> bool:

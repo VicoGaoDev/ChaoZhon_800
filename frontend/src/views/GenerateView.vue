@@ -36,6 +36,13 @@ import {
   QuestionCircleOutlined,
 } from "@ant-design/icons-vue";
 import { getTaskScenes } from "@/api/config";
+import {
+  APPLY_CHAT_GENERATE_DRAFT_EVENT,
+  CHAT_DRAFT_KEY,
+  CHAT_GENERATE_TASKS_CREATED_EVENT,
+  requestOpenAiAssistantDock,
+  type ChatGenerateTasksPayload,
+} from "@/lib/chatGenerateDraft";
 import { deleteHistoryTask, fetchHistory } from "@/api/history";
 import { createTask, getTasks } from "@/api/tasks";
 import {
@@ -416,6 +423,7 @@ function toGenerationModelOption(scene: TaskSceneConfig): GenerationModelOption 
     custom_size_max: scene.custom_size_max,
     custom_size_step: scene.custom_size_step,
     credit_cost: scene.credit_cost,
+    estimated_seconds: scene.estimated_seconds,
     resolution_credit_costs: scene.resolution_credit_costs || {},
     max_reference_images: scene.max_reference_images,
     aspect_ratio_options: scene.aspect_ratio_options,
@@ -1182,6 +1190,76 @@ function handleGenerateMenuEntry(event: Event) {
     generateMode.value = mode;
   }
   isConfigPanelCollapsed.value = false;
+}
+
+function openPromptAiAssistant() {
+  requestOpenAiAssistantDock();
+}
+
+function handleChatGenerateDraft() {
+  isConfigPanelCollapsed.value = false;
+  applyDraft(
+    localStorage.getItem(CHAT_DRAFT_KEY),
+    "已从 AI 对话回填提示词，可继续编辑后生成",
+    CHAT_DRAFT_KEY,
+  );
+}
+
+function handleChatGenerateTasksCreated(event: Event) {
+  const detail = (event as CustomEvent<ChatGenerateTasksPayload>).detail;
+  upsertChatGeneratedTasks(detail);
+}
+
+function upsertChatGeneratedTasks(payload?: ChatGenerateTasksPayload | null) {
+  const taskIds = (payload?.taskIds || [])
+    .map((taskId) => String(taskId || "").trim())
+    .filter(Boolean);
+  if (!taskIds.length) return;
+
+  const existingIds = new Set(
+    generatedTasks.value
+      .map((task) => task.taskId)
+      .filter((taskId): taskId is string => Boolean(taskId)),
+  );
+  const referenceImages = Array.isArray(payload?.referenceImages)
+    ? payload.referenceImages.map((url) => String(url || "").trim()).filter(Boolean)
+    : [];
+  const mode: SubmitMode = payload?.modeHint === "image_edit" || referenceImages.length
+    ? "imageEdit"
+    : "textGenerate";
+  const perCardImageCount = taskIds.length > 1
+    ? 1
+    : Math.max(1, Number(payload?.numImages) || 1);
+  const newcomers = taskIds
+    .filter((taskId) => !existingIds.has(taskId))
+    .map((taskId) => ({
+      localId: `chat-${taskId}`,
+      taskId,
+      mode,
+      prompt: payload?.prompt || "",
+      model: payload?.model || undefined,
+      numImages: perCardImageCount,
+      size: payload?.size || "1:1",
+      resolution: payload?.resolution || "2K",
+      customSize: payload?.customSize || "",
+      referenceImages,
+      referenceImageThumbs: referenceImages,
+      createdAt: new Date().toISOString(),
+      status: "pending" as const,
+      errorMessage: "",
+      creditRefunded: false,
+      failureRefundRemainingCount: null,
+      images: createPendingImages(perCardImageCount),
+    }));
+
+  if (newcomers.length) {
+    generatedTasks.value = [...newcomers, ...generatedTasks.value];
+    if (resultBodyRef.value) resultBodyRef.value.scrollTop = 0;
+  }
+
+  startTaskPolling();
+  void refreshTasks(taskIds);
+  getMe().then((user) => auth.updateUser(user)).catch(() => {});
 }
 
 function syncTaskFromResult(taskId: string, data: TaskResult) {
@@ -2967,7 +3045,7 @@ function applyDraft(raw: string | null, successText: string, storageKey: string)
   if (!raw) return;
   try {
     const draft = JSON.parse(raw) as {
-      mode?: "generate" | "inpaint" | "promptReverse";
+      mode?: "generate" | "textGenerate" | "imageEdit" | "inpaint" | "promptReverse";
       prompt?: string;
       model?: string;
       reference_images?: string[];
@@ -2982,9 +3060,13 @@ function applyDraft(raw: string | null, successText: string, storageKey: string)
       ? "inpaint"
       : draft.mode === "promptReverse"
         ? "promptReverse"
-        : Array.isArray(draft.reference_images) && draft.reference_images.length
+        : draft.mode === "imageEdit"
           ? "imageEdit"
-          : "textGenerate";
+          : draft.mode === "textGenerate"
+            ? "textGenerate"
+            : Array.isArray(draft.reference_images) && draft.reference_images.length
+              ? "imageEdit"
+              : "textGenerate";
     generateMode.value = draftMode;
     size.value = draft.size || "9:16";
     resolution.value = draft.resolution || "2K";
@@ -3088,6 +3170,8 @@ onMounted(async () => {
   window.addEventListener("resize", syncViewportWidth);
   window.addEventListener("paste", handleReferencePaste);
   window.addEventListener(GENERATE_MENU_ENTRY_EVENT, handleGenerateMenuEntry);
+  window.addEventListener(APPLY_CHAT_GENERATE_DRAFT_EVENT, handleChatGenerateDraft);
+  window.addEventListener(CHAT_GENERATE_TASKS_CREATED_EVENT, handleChatGenerateTasksCreated);
   await Promise.all([
     loadTaskSceneConfigs(),
     loadRecentGeneratedTasks(),
@@ -3102,6 +3186,11 @@ onMounted(async () => {
     localStorage.getItem(TEMPLATE_DRAFT_KEY),
     "已套用创意模版参数，可继续编辑后生成",
     TEMPLATE_DRAFT_KEY
+  );
+  applyDraft(
+    localStorage.getItem(CHAT_DRAFT_KEY),
+    "已从 AI 对话回填提示词，可继续编辑后生成",
+    CHAT_DRAFT_KEY
   );
   applyRouteGenerateMode();
 });
@@ -3122,6 +3211,8 @@ onBeforeUnmount(() => {
   window.removeEventListener("resize", syncViewportWidth);
   window.removeEventListener("paste", handleReferencePaste);
   window.removeEventListener(GENERATE_MENU_ENTRY_EVENT, handleGenerateMenuEntry);
+  window.removeEventListener(APPLY_CHAT_GENERATE_DRAFT_EVENT, handleChatGenerateDraft);
+  window.removeEventListener(CHAT_GENERATE_TASKS_CREATED_EVENT, handleChatGenerateTasksCreated);
   unbindReferenceDragHandlers?.();
   unbindReferenceDragHandlers = null;
   referenceItems.value.forEach((item) => revokeObjectUrl(item.objectUrl));
@@ -3475,6 +3566,9 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
                 </div>
               </div>
 
+                <button type="button" class="prompt-ai-chat-entry" @click="openPromptAiAssistant">
+                  提示词怎么写？跟AI聊聊想法
+                </button>
               <div class="settings-row settings-row-inline config-section compact-config-section">
                 <div v-if="!hideAspectRatio && !customSizeEnabled" class="setting-item setting-item-inline">
                   <label>宽高比</label>
@@ -3883,6 +3977,9 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
                 </div>
               </div>
 
+                <button type="button" class="prompt-ai-chat-entry" @click="openPromptAiAssistant">
+                  提示词怎么写？跟AI聊聊想法
+                </button>
               <div class="settings-row settings-row-inline config-section compact-config-section">
                 <div v-if="!hideAspectRatio && !customSizeEnabled" class="setting-item setting-item-inline">
                   <label>宽高比</label>
@@ -5462,6 +5559,26 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
   font-size: 12px;
   font-weight: 600;
   line-height: 1;
+}
+
+.prompt-ai-chat-entry {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  margin-top: -12px;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--theme-text-primary);
+  font-size: 13px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.prompt-ai-chat-entry:hover,
+.prompt-ai-chat-entry:focus-visible {
+  background: var(--theme-field-hover-bg, var(--theme-control-hover-bg));
 }
 
 .prompt-optimize-cancel-btn {

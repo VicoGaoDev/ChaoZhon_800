@@ -24,6 +24,38 @@ def _normalize_url(value: str | None) -> str:
     return (value or "").strip()
 
 
+def resolve_avatar_url(
+    avatar_url: str | None,
+    *,
+    cos_config: CosRuntimeConfig | None = None,
+) -> str:
+    canonical_url = _normalize_url(avatar_url)
+    if not canonical_url:
+        return ""
+    if canonical_url.startswith("data:"):
+        return canonical_url
+
+    parsed = urlparse(canonical_url)
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        if _looks_like_cos_url(canonical_url, cos_config):
+            return canonical_url
+        path = parsed.path or ""
+        if "/uploads/avatar/" in path or path.startswith("/avatar/") or "/avatar/" in path:
+            if cos_config:
+                return build_cos_public_url(cos_config, path.lstrip("/"))
+        return canonical_url
+
+    if not cos_config:
+        return canonical_url
+    return build_cos_public_url(cos_config, canonical_url.lstrip("/"))
+
+
+def resolve_user_avatar_url(user, *, cos_config: CosRuntimeConfig | None = None) -> str:
+    if not user:
+        return ""
+    return resolve_avatar_url(getattr(user, "avatar_url", None), cos_config=cos_config)
+
+
 def normalize_external_image_url(
     image_url: str | None,
     *,
