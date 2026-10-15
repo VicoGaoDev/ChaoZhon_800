@@ -39,3 +39,6 @@ Thumbs.db
 
 # gptimage2 提示词参考图片
 gptimage2-prompt/data/images/
+
+# 本地说明，不纳入版本库
+README.md
