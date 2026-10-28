@@ -25,6 +25,19 @@ const router = createRouter({
           component: () => import("@/views/ChatView.vue"),
         },
         {
+          path: "canvas",
+          name: "Canvas",
+          meta: { requiresAuth: true },
+          component: () => import("@/views/CanvasListView.vue"),
+        },
+        {
+          path: "canvas/:projectId",
+          name: "CanvasDetail",
+          meta: { requiresAuth: true, hideTopMenu: true, workbenchLayout: true },
+          component: () => import("@/views/CanvasView.vue"),
+          props: (route) => ({ projectId: String(route.params.projectId || "") }),
+        },
+        {
           path: "generate",
           name: "Generate",
           component: () => import("@/views/GenerateView.vue"),
@@ -171,6 +184,26 @@ const router = createRouter({
           meta: { requiresAdmin: true },
           component: () => import("@/views/HistoryView.vue"),
           props: { adminUserTasks: true },
+        },
+        {
+          path: "admin/user-canvases",
+          name: "AdminUserCanvases",
+          meta: { requiresAdmin: true },
+          component: () => import("@/views/CanvasListView.vue"),
+          props: { adminCanvases: true },
+        },
+        {
+          path: "admin/example-canvases",
+          name: "AdminExampleCanvases",
+          meta: { requiresAdmin: true },
+          component: () => import("@/views/admin/ExampleCanvasManageView.vue"),
+        },
+        {
+          path: "admin/user-canvases/:projectId",
+          name: "AdminUserCanvasDetail",
+          meta: { requiresAdmin: true, hideTopMenu: true, workbenchLayout: true },
+          component: () => import("@/views/CanvasView.vue"),
+          props: (route) => ({ projectId: String(route.params.projectId || "") }),
         },
         {
           path: "admin/user-conversations/:sessionId?",

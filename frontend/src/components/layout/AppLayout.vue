@@ -46,6 +46,7 @@ import NavGenerateImageIcon from "@/components/icons/NavGenerateImageIcon.vue";
 import ActivityPromotion from "@/components/generate/ActivityPromotion.vue";
 import type { ActivityItem, AnnouncementConfig, PaymentPlan } from "@/types";
 import {
+  AppstoreOutlined,
   PictureOutlined,
   FontSizeOutlined,
   HighlightOutlined,
@@ -84,7 +85,9 @@ const isAdmin = computed(() => auth.isAdmin);
 const isSuperAdmin = computed(() => auth.isSuperAdmin);
 const showRegisterPromoCode = true;
 const hideTopMenu = computed(() => route.meta.hideTopMenu === true);
-const showDesktopSideNav = computed(() => !hideTopMenu.value);
+const isWorkbenchLayout = computed(() => route.meta.workbenchLayout === true);
+const isCanvasRoute = computed(() => route.path.startsWith("/canvas") || route.path.startsWith("/admin/user-canvases/"));
+const showDesktopSideNav = computed(() => !hideTopMenu.value || (isWorkbenchLayout.value && isCanvasRoute.value));
 const mobileDrawerOpen = ref(false);
 const routeTransitionName = ref("route-page-forward");
 const canManagePromoCodes = computed(() => auth.user?.is_whitelisted === true);
@@ -93,6 +96,7 @@ const routeOrder = new Map<string, number>([
   ["/", 0],
   ["/templates", 1],
   ["/chat", 1.5],
+  ["/canvas", 1.7],
   ["/generate", 2],
   ["/history", 3],
   ["/profile", 4],
@@ -109,6 +113,8 @@ const routeOrder = new Map<string, number>([
   ["/admin/prompt-optimize", 14.5],
   ["/admin/users", 15],
   ["/admin/user-tasks", 16],
+  ["/admin/user-canvases", 16.1],
+  ["/admin/example-canvases", 14.7],
   ["/admin/user-conversations", 16.2],
   ["/admin/overview", 16.5],
   ["/admin/dashboard", 17],
@@ -162,11 +168,17 @@ const showAiAssistantDock = computed(() => {
   return path.startsWith("/generate") || path.startsWith("/templates") || path.startsWith("/history");
 });
 
+type MoreFeatureMenuKey = "templates" | "history";
+const moreFeatureMenuItems: Array<{ key: MoreFeatureMenuKey; label: string; icon: Component; iconSrc: string }> = [
+  { key: "templates", label: "创意模版", icon: BulbOutlined, iconSrc: withBaseUrl("nav-templates.svg") },
+  { key: "history", label: "历史图片", icon: ClockCircleOutlined, iconSrc: withBaseUrl("nav-history.svg") },
+];
+
 const primaryMenuItems: PrimaryMenuItem[] = [
-  { key: "templates", label: "创意模版", iconSrc: withBaseUrl("nav-templates.svg"), darkIconSrc: withBaseUrl("nav-templates-mono.svg"), icon: BulbOutlined },
   { key: "chat", label: "AI 对话", iconSrc: withBaseUrl("nav-generate.svg"), icon: MessageOutlined },
   { key: "generate", label: "AI 生图", iconSrc: withBaseUrl("nav-generate.svg"), icon: NavGenerateImageIcon },
-  { key: "history", label: "历史图片", iconSrc: withBaseUrl("nav-history.svg"), darkIconSrc: withBaseUrl("nav-history-mono.svg"), icon: ClockCircleOutlined },
+  { key: "canvas", label: "无限画布", iconSrc: withBaseUrl("nav-canvas.svg") },
+  { key: "more", label: "更多", iconSrc: withBaseUrl("nav-templates.svg"), icon: MenuOutlined },
 ];
 
 function getPrimaryMenuIconSrc(item: PrimaryMenuItem) {
@@ -215,12 +227,26 @@ function handleGenerateEntryMenu({ key }: { key: string }) {
   }
 }
 
+const activeMoreFeatureKey = computed<MoreFeatureMenuKey | "">(() => {
+  if (route.path.startsWith("/templates")) return "templates";
+  if (route.path.startsWith("/history")) return "history";
+  return "";
+});
+
+function handleMoreFeatureMenu({ key }: { key: string }) {
+  if (key === "templates" || key === "history") {
+    handleMenuClick({ key });
+  }
+}
+
 const adminMenuItems = computed(() =>
   [
     { key: "/admin/templates", label: "模版管理", icon: PictureOutlined, superAdminOnly: false },
     { key: "/admin/prompt-optimize", label: "提示词优化", icon: ThunderboltOutlined, superAdminOnly: false },
     { key: "/admin/users", label: "用户管理", icon: TeamOutlined, superAdminOnly: false },
     { key: "/admin/user-tasks", label: "用户任务", icon: PictureOutlined, superAdminOnly: false },
+    { key: "/admin/user-canvases", label: "用户画布", icon: AppstoreOutlined, superAdminOnly: false },
+    { key: "/admin/example-canvases", label: "示例画布", icon: AppstoreOutlined, superAdminOnly: false },
     { key: "/admin/user-conversations", label: "用户对话", icon: CommentOutlined, superAdminOnly: false },
     { key: "/admin/overview", label: "固定概览", icon: DashboardOutlined, superAdminOnly: false },
     { key: "/admin/dashboard", label: "数据统计", icon: BarChartOutlined, superAdminOnly: false },
@@ -244,13 +270,13 @@ const adminMenuGroups = computed(() =>
       key: "admin-templates",
       label: "模版管理",
       icon: PictureOutlined,
-      itemKeys: ["/admin/templates", "/admin/prompt-optimize"],
+      itemKeys: ["/admin/templates", "/admin/prompt-optimize", "/admin/example-canvases"],
     },
     {
       key: "admin-users",
       label: "用户数据",
       icon: TeamOutlined,
-      itemKeys: ["/admin/users", "/admin/user-tasks", "/admin/user-conversations", "/admin/feedbacks", "/admin/system-messages"],
+      itemKeys: ["/admin/users", "/admin/user-tasks", "/admin/user-canvases", "/admin/user-conversations", "/admin/feedbacks", "/admin/system-messages"],
     },
     {
       key: "admin-analytics",
@@ -300,6 +326,8 @@ function getRouteRank(path: string) {
   if (path.startsWith("/system-messages/")) return routeOrder.get("/system-messages/:messageId") ?? 0;
   if (path.startsWith("/admin/feedbacks/")) return routeOrder.get("/admin/feedbacks/:feedbackId") ?? 0;
   if (path.startsWith("/chat")) return routeOrder.get("/chat") ?? 0;
+  if (path.startsWith("/canvas")) return routeOrder.get("/canvas") ?? 0;
+  if (path.startsWith("/admin/user-canvases")) return routeOrder.get("/admin/user-canvases") ?? 0;
   if (path.startsWith("/admin/user-conversations")) return routeOrder.get("/admin/user-conversations") ?? 0;
   return routeOrder.get(path) ?? 0;
 }
@@ -308,10 +336,11 @@ const selectedKeys = computed(() => {
   const p = route.path;
   if (p.startsWith("/admin")) return ["admin"];
   if (p === "/") return [];
-  if (p === "/templates") return ["templates"];
+  if (p.startsWith("/templates")) return ["more"];
   if (p.startsWith("/chat")) return ["chat"];
+  if (p.startsWith("/canvas")) return ["canvas"];
   if (p === "/batch-generate") return ["batch-generate"];
-  if (p === "/history") return ["history"];
+  if (p.startsWith("/history")) return ["more"];
   if (
     p === "/profile" ||
     p === "/settings" ||
@@ -329,6 +358,8 @@ const adminSelectedKeys = computed(() => {
   if (!route.path.startsWith("/admin")) return [];
   if (route.path.startsWith("/admin/feedbacks")) return ["/admin/feedbacks"];
   if (route.path.startsWith("/admin/user-conversations")) return ["/admin/user-conversations"];
+  if (route.path.startsWith("/admin/user-canvases")) return ["/admin/user-canvases"];
+  if (route.path.startsWith("/admin/example-canvases")) return ["/admin/example-canvases"];
   return [route.path];
 });
 
@@ -364,6 +395,13 @@ function handleMenuClick({ key }: { key: string }) {
   else if (key === "generate") {
     window.dispatchEvent(new CustomEvent(GENERATE_MENU_ENTRY_EVENT));
     router.push("/generate");
+  }
+  else if (key === "canvas") {
+    if (!auth.isLoggedIn) {
+      loginModalVisible.value = true;
+      return;
+    }
+    router.push("/canvas");
   }
   else if (key === "textGenerate" || key === "imageEdit" || key === "inpaint" || key === "promptReverse") {
     openGenerateEntry(key);
@@ -1257,11 +1295,24 @@ watch(purchaseDialogOpen, (open) => {
           class="header-menu"
           @click="handleMenuClick"
         >
-          <a-menu-item v-for="item in primaryMenuItems" :key="item.key">
-            <component v-if="item.icon" :is="item.icon" class="nav-menu-system-icon" />
-            <img v-else :src="getPrimaryMenuIconSrc(item)" :alt="item.label" class="nav-menu-icon" />
-            <span>{{ item.label }}</span>
-          </a-menu-item>
+          <template v-for="item in primaryMenuItems" :key="item.key">
+            <a-sub-menu v-if="item.key === 'more'" key="more" popup-class-name="warm-dropdown">
+              <template #icon>
+                <component v-if="item.icon" :is="item.icon" class="nav-menu-system-icon" />
+                <img v-else :src="getPrimaryMenuIconSrc(item)" :alt="item.label" class="nav-menu-icon" />
+              </template>
+              <template #title>{{ item.label }}</template>
+              <a-menu-item v-for="subItem in moreFeatureMenuItems" :key="subItem.key">
+                <template #icon><component :is="subItem.icon" /></template>
+                {{ subItem.label }}
+              </a-menu-item>
+            </a-sub-menu>
+            <a-menu-item v-else :key="item.key">
+              <component v-if="item.icon" :is="item.icon" class="nav-menu-system-icon" />
+              <img v-else :src="getPrimaryMenuIconSrc(item)" :alt="item.label" class="nav-menu-icon" />
+              <span>{{ item.label }}</span>
+            </a-menu-item>
+          </template>
         </a-menu>
 
         <div class="header-actions">
@@ -1390,6 +1441,33 @@ watch(purchaseDialogOpen, (open) => {
                 </a-menu-item>
                 <a-menu-divider />
                 <a-menu-item v-for="subItem in generateEntryToolMenuItems" :key="subItem.key">
+                  <template #icon><component :is="subItem.icon" /></template>
+                  {{ subItem.label }}
+                </a-menu-item>
+              </a-menu>
+            </template>
+          </a-dropdown>
+          <a-dropdown
+            v-else-if="item.key === 'more'"
+            :trigger="['hover']"
+            placement="rightTop"
+            :auto-adjust-overflow="false"
+            :align="{ offset: [16, 0], overflow: { adjustX: false, adjustY: false } }"
+            :get-popup-container="getDropdownPopupContainer"
+            overlay-class-name="warm-dropdown"
+          >
+            <button
+              type="button"
+              class="canvas-side-nav-item"
+              :class="{ active: selectedKeys.includes(item.key) }"
+            >
+              <component v-if="item.icon" :is="item.icon" class="nav-menu-system-icon" />
+              <img v-else :src="getPrimaryMenuIconSrc(item)" :alt="item.label" class="nav-menu-icon" />
+              <span>{{ item.label }}</span>
+            </button>
+            <template #overlay>
+              <a-menu :selected-keys="activeMoreFeatureKey ? [activeMoreFeatureKey] : []" @click="handleMoreFeatureMenu">
+                <a-menu-item v-for="subItem in moreFeatureMenuItems" :key="subItem.key">
                   <template #icon><component :is="subItem.icon" /></template>
                   {{ subItem.label }}
                 </a-menu-item>
@@ -1555,7 +1633,13 @@ watch(purchaseDialogOpen, (open) => {
       </div>
     </aside>
 
-    <a-layout-content class="app-content" :class="{ 'app-content-desktop-side-nav': showDesktopSideNav }">
+    <a-layout-content
+      class="app-content"
+      :class="{
+        'app-content-workbench': isWorkbenchLayout,
+        'app-content-desktop-side-nav': showDesktopSideNav,
+      }"
+    >
       <div class="content-inner">
         <router-view v-slot="{ Component, route: currentRoute }">
           <transition :name="routeTransitionName" mode="out-in">
@@ -1617,13 +1701,26 @@ watch(purchaseDialogOpen, (open) => {
             class="mobile-drawer-menu"
             @click="handleMenuClick"
           >
-            <a-menu-item v-for="item in primaryMenuItems" :key="item.key">
-              <template #icon>
-                <component v-if="item.icon" :is="item.icon" class="nav-menu-system-icon" />
-                <img v-else :src="getPrimaryMenuIconSrc(item)" :alt="item.label" class="nav-menu-icon" />
-              </template>
-              <span>{{ item.label }}</span>
-            </a-menu-item>
+            <template v-for="item in primaryMenuItems" :key="item.key">
+              <a-sub-menu v-if="item.key === 'more'" key="more">
+                <template #icon>
+                  <component v-if="item.icon" :is="item.icon" class="nav-menu-system-icon" />
+                  <img v-else :src="getPrimaryMenuIconSrc(item)" :alt="item.label" class="nav-menu-icon" />
+                </template>
+                <template #title>{{ item.label }}</template>
+                <a-menu-item v-for="subItem in moreFeatureMenuItems" :key="subItem.key">
+                  <template #icon><component :is="subItem.icon" /></template>
+                  {{ subItem.label }}
+                </a-menu-item>
+              </a-sub-menu>
+              <a-menu-item v-else :key="item.key">
+                <template #icon>
+                  <component v-if="item.icon" :is="item.icon" class="nav-menu-system-icon" />
+                  <img v-else :src="getPrimaryMenuIconSrc(item)" :alt="item.label" class="nav-menu-icon" />
+                </template>
+                <span>{{ item.label }}</span>
+              </a-menu-item>
+            </template>
           </a-menu>
         </div>
 
@@ -3460,6 +3557,20 @@ html:is([data-theme="dark"], [data-theme="midnight"]) .warm-dropdown .ant-dropdo
 .app-content-desktop-side-nav {
   width: calc(100% - 76px);
   margin-left: 76px;
+}
+
+.app-content-workbench {
+  padding: 0;
+
+  &::before {
+    display: none;
+  }
+
+  .content-inner,
+  .route-page-shell {
+    height: 100%;
+    max-width: none;
+  }
 }
 
 .app-content {

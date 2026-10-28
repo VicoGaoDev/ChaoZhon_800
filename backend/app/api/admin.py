@@ -21,6 +21,7 @@ from app.schemas.feedback import (
     FeedbackUpdateRequest,
 )
 from app.schemas.chat import ChatMessageListOut, ChatSessionAdminListOut, ChatSessionAdminOut
+from app.schemas.canvas import CanvasListResponse
 from app.schemas.history import HistoryResponse, UserHistoryCardItem, UserHistoryResponse
 from app.schemas.task import TaskOut
 from app.services.business_id_service import get_user_by_business_id
@@ -46,6 +47,7 @@ from app.services.feedback_service import (
     update_feedback,
 )
 from app.services.chat_service import get_admin_session, list_admin_messages, list_admin_sessions
+from app.services.canvas_service import list_all_canvases
 from app.services.history_service import get_admin_history_cards, get_admin_history_detail, get_all_history
 from app.services.image_delivery_service import get_optional_cos_config, serialize_task
 from app.services.task_service import get_task_details
@@ -308,6 +310,24 @@ def admin_get_payment_order_reconcile_scan_status(
     _user: User = Depends(require_admin),
 ):
     return get_manual_payment_reconcile_status(run_id)
+
+
+@router.get("/canvases", response_model=CanvasListResponse)
+def admin_list_canvases(
+    _user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    keyword: str | None = Query(None),
+    user_id: str | None = Query(None),
+):
+    return list_all_canvases(
+        db,
+        page=page,
+        page_size=page_size,
+        keyword=keyword,
+        owner_user_id=_resolve_optional_user_id(db, user_id),
+    )
 
 
 @router.get("/chat/sessions", response_model=ChatSessionAdminListOut)

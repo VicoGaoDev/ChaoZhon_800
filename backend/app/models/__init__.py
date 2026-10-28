@@ -31,6 +31,11 @@ from app.models.chat_external_api_config import ChatExternalApiConfig
 from app.models.chat_external_api_scene_binding import ChatExternalApiSceneBinding
 from app.models.chat_session import ChatSession
 from app.models.chat_message import ChatMessage
+from app.models.user_canvas import UserCanvas
+from app.models.canvas_node import CanvasNode
+from app.models.canvas_edge import CanvasEdge
+from app.models.canvas_group import CanvasGroup
+from app.models.example_canvas_project import ExampleCanvasProject
 from app.models.template import Template
 from app.models.template_tag import TemplateTag
 from app.models.template_tag_relation import TemplateTagRelation
@@ -70,6 +75,11 @@ __all__ = [
     "ChatExternalApiSceneBinding",
     "ChatSession",
     "ChatMessage",
+    "UserCanvas",
+    "CanvasNode",
+    "CanvasEdge",
+    "CanvasGroup",
+    "ExampleCanvasProject",
     "Template",
     "TemplateTag",
     "TemplateTagRelation",

@@ -309,6 +309,7 @@ def create_tasks(
     reference_images: list[str] | None = None,
     source_image: str = "",
     mask_image: str = "",
+    canvas_id: int | None = None,
 ) -> list[Task]:
     mode, num_images = _validate_task_create_payload(
         mode=mode,
@@ -414,6 +415,7 @@ def create_tasks(
         for _ in range(task_count):
             task = Task(
                 user_id=user_id,
+                canvas_id=canvas_id,
                 model=normalized_model,
                 source=normalized_source,
                 mode=mode,

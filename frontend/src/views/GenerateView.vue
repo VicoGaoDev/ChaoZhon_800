@@ -172,9 +172,10 @@ const TASK_PROMPT_MAX_LENGTH = 5000;
 const MAX_REFERENCE_FILE_SIZE = 20 * 1024 * 1024;
 const MAX_REFERENCE_FILE_SIZE_MB = MAX_REFERENCE_FILE_SIZE / (1024 * 1024);
 const MAX_IMAGE_UPLOAD_SIZE_TEXT = `${MAX_REFERENCE_FILE_SIZE_MB}MB`;
+const DEFAULT_RESOLUTION = "4K";
 const selectedModel = ref("");
 const numImages = ref(1);
-const resolution = ref("2K");
+const resolution = ref(DEFAULT_RESOLUTION);
 const size = ref("9:16");
 const customSize = ref("");
 const customSizeEnabled = ref(false);
@@ -1240,7 +1241,7 @@ function upsertChatGeneratedTasks(payload?: ChatGenerateTasksPayload | null) {
       model: payload?.model || undefined,
       numImages: perCardImageCount,
       size: payload?.size || "1:1",
-      resolution: payload?.resolution || "2K",
+      resolution: payload?.resolution || DEFAULT_RESOLUTION,
       customSize: payload?.customSize || "",
       referenceImages,
       referenceImageThumbs: referenceImages,
@@ -1333,7 +1334,7 @@ function convertHistoryCardToGeneratedTask(item: UserHistoryCard): GeneratedTask
     model: item.model || undefined,
     numImages: fallbackImageCount,
     size: item.size || "9:16",
-    resolution: item.resolution || "2K",
+    resolution: item.resolution || DEFAULT_RESOLUTION,
     customSize: item.custom_size || "",
     referenceImages: Array.isArray(item.reference_images) ? item.reference_images : [],
     referenceImageThumbs: Array.isArray(item.reference_image_thumbs) && item.reference_image_thumbs.length
@@ -2567,7 +2568,7 @@ async function handleGenerate() {
 function handleReeditTask(task: GeneratedTaskItem) {
   generateMode.value = task.mode;
   size.value = task.size || "9:16";
-  resolution.value = task.resolution || "2K";
+  resolution.value = task.resolution || DEFAULT_RESOLUTION;
 
   if (task.mode === "inpaint") {
     applyPromptWithGenerateStyles(task.prompt, "repaintPrompt");
@@ -2610,7 +2611,7 @@ function handleEditImageTask(task: GeneratedTaskItem, image: ImageResult) {
   applyPromptWithGenerateStyles(task.prompt, "prompt");
   repaintPrompt.value = "";
   size.value = task.size || "9:16";
-  resolution.value = task.resolution || "2K";
+  resolution.value = task.resolution || DEFAULT_RESOLUTION;
   refillCustomSizeFromValue(task.customSize);
   numImages.value = Math.min(MAX_ACTIVE_GENERATION_IMAGES, Math.max(1, Number(task.numImages || 1)));
   syncReferenceItems([referenceImage]);
@@ -2936,7 +2937,7 @@ function handleInpaintGeneratedImage(task: GeneratedTaskItem, img: ImageResult) 
   repaintPrompt.value = task.prompt || "";
   prompt.value = "";
   size.value = task.size || sizeOptions.value[0]?.value || "1:1";
-  resolution.value = task.resolution || "2K";
+  resolution.value = task.resolution || DEFAULT_RESOLUTION;
   refillCustomSizeFromValue(task.customSize);
   numImages.value = 1;
   syncReferenceItems([]);
@@ -2971,7 +2972,7 @@ function handleCreateTemplateFromGeneratedTask(task: GeneratedTaskItem, image: I
     reference_images: [...task.referenceImages],
     result_image: image.image_url,
     size: task.size || "9:16",
-    resolution: task.resolution || "2K",
+    resolution: task.resolution || DEFAULT_RESOLUTION,
     custom_size: task.customSize || "",
   };
   templateDialogRef.value?.openFromTask(draft);
@@ -3069,7 +3070,7 @@ function applyDraft(raw: string | null, successText: string, storageKey: string)
               : "textGenerate";
     generateMode.value = draftMode;
     size.value = draft.size || "9:16";
-    resolution.value = draft.resolution || "2K";
+    resolution.value = draft.resolution || DEFAULT_RESOLUTION;
 
     if (draftMode === "inpaint") {
       applyPromptWithGenerateStyles(draft.prompt || "", "repaintPrompt");

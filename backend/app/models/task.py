@@ -11,6 +11,7 @@ class Task(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     business_id = Column(String(32), unique=True, nullable=False, index=True, default=generate_business_id)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    canvas_id = Column(Integer, ForeignKey("user_canvas.id", ondelete="SET NULL"), nullable=True, index=True)
     model = Column(String(50), default="")
     source = Column(String(20), nullable=False, default="web", server_default="web")
     mode = Column(String(20), default="generate")
@@ -27,6 +28,7 @@ class Task(Base):
     status = Column(String(20), default="pending")
     error_message = Column(Text, default="")
     used_fallback_api = Column(Boolean, nullable=False, default=False, server_default="0")
+    is_example_template_seed = Column(Boolean, nullable=False, default=False, server_default="0")
     is_deleted = Column(Boolean, default=False, nullable=False, server_default="0")
     created_at = Column(DateTime, server_default=func.now())
     enqueued_at = Column(DateTime, nullable=True)
@@ -35,5 +37,7 @@ class Task(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     user = relationship("User", backref="tasks")
+    canvas = relationship("UserCanvas", back_populates="tasks")
+    canvas_node = relationship("CanvasNode", back_populates="task", uselist=False)
     images = relationship("Image", back_populates="task", lazy="selectin")
     api_attempts = relationship("TaskApiAttempt", back_populates="task", lazy="selectin")

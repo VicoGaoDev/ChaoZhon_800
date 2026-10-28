@@ -58,6 +58,7 @@ export interface TaskResult {
   id: string;
   model: string;
   source: TaskSource;
+  mode?: TaskMode;
   prompt: string;
   num_images: number;
   size: string;
@@ -1278,7 +1279,7 @@ export interface ActivityPayload {
   sort_order: number;
 }
 
-export type UploadPurpose = "ref" | "chat" | "source" | "mask" | "reverse" | "misc" | "activity" | "template";
+export type UploadPurpose = "ref" | "chat" | "source" | "mask" | "reverse" | "misc" | "activity" | "canvas_upload" | "template";
 
 export interface UploadCredential {
   bucket: string;
@@ -1319,6 +1320,221 @@ export interface UserPrompt {
 export interface UserPromptListResponse {
   items: UserPrompt[];
   total: number;
+}
+
+export interface UserCanvasSummary {
+  id: number;
+  project_id: string;
+  name: string;
+  node_count: number;
+  preview_urls: string[];
+  viewport_x: number;
+  viewport_y: number;
+  zoom: number;
+  is_readonly?: boolean;
+  is_deleted?: boolean;
+  owner_user_id?: string;
+  owner_username?: string;
+  owner_avatar_url?: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface CanvasNode {
+  id: number;
+  canvas_id: number;
+  group_id?: number | null;
+  task_id: string;
+  video_task_id?: string;
+  node_type: "task" | "text" | "image";
+  content: string;
+  image_url: string;
+  asset_is_deleted?: boolean;
+  uploadStatus?: "uploading" | "success" | "failed";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  z_index: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+  task?: TaskResult | null;
+  video_task?: VideoTaskResult | null;
+}
+
+export interface CanvasGroup {
+  id: number;
+  canvas_id: number;
+  name: string;
+  color: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  z_index: number;
+  node_ids: number[];
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface CanvasEdge {
+  id: number;
+  canvas_id: number;
+  source_node_id: number;
+  target_node_id: number;
+  edge_type: string;
+  source_anchor: "auto" | "top" | "right" | "bottom" | "left";
+  target_anchor: "auto" | "top" | "right" | "bottom" | "left";
+  is_collapsed: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface CanvasDetail extends UserCanvasSummary {
+  nodes: CanvasNode[];
+  edges: CanvasEdge[];
+  groups: CanvasGroup[];
+}
+
+export interface CanvasGroupAssignNodesResponse {
+  group: CanvasGroup;
+  groups: CanvasGroup[];
+  nodes: CanvasNode[];
+  deleted_group_ids: number[];
+}
+
+export interface CanvasGroupRemoveNodesResponse {
+  groups: CanvasGroup[];
+  nodes: CanvasNode[];
+  deleted_group_ids: number[];
+}
+
+export interface UserCanvasListResponse {
+  items: UserCanvasSummary[];
+  total: number;
+  page: number;
+  page_size: number;
+  has_more: boolean;
+}
+
+export type ExampleCanvasStatus = "draft" | "published" | "disabled";
+
+export interface ExampleCanvasProject {
+  id: number;
+  source_canvas_id: number;
+  source_project_id: string;
+  source_canvas_name: string;
+  title: string;
+  subtitle: string;
+  cover_url: string;
+  status: ExampleCanvasStatus;
+  sort_order: number;
+  preview_urls: string[];
+  created_by: string;
+  updated_by: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface ExampleCanvasProjectListResponse {
+  items: ExampleCanvasProject[];
+}
+
+export interface ExampleCanvasProjectCreatePayload {
+  project_id: string;
+  title?: string;
+  subtitle?: string;
+  cover_url?: string;
+  sort_order?: number;
+  status?: ExampleCanvasStatus;
+}
+
+export interface ExampleCanvasProjectUpdatePayload {
+  project_id?: string;
+  title?: string;
+  subtitle?: string;
+  cover_url?: string;
+  sort_order?: number;
+  status?: ExampleCanvasStatus;
+  refresh_snapshot?: boolean;
+}
+
+export interface ExampleCanvasCopyResponse {
+  canvas: UserCanvasSummary;
+}
+
+export interface CanvasTaskPayload {
+  model?: string;
+  source?: "web" | "app" | "api";
+  prompt: string;
+  num_images: number;
+  size: string;
+  resolution: string;
+  custom_size?: string;
+  mode?: "generate" | "inpaint";
+  reference_images?: string[];
+  source_node_ids?: number[];
+  source_image?: string;
+  mask_image?: string;
+  x: number;
+  y: number;
+  width?: number;
+  height?: number;
+}
+
+export interface CanvasTaskCreateResponse {
+  task_id?: string | null;
+  task_ids: string[];
+  nodes: CanvasNode[];
+}
+
+export interface VideoResult {
+  id: number;
+  video_url: string;
+  cover_url: string;
+  status: "pending" | "success" | "failed";
+  error_message?: string;
+}
+
+export interface VideoTaskResult {
+  id: string;
+  model: string;
+  source: TaskSource;
+  prompt: string;
+  duration_seconds: number;
+  aspect_ratio: string;
+  resolution: string;
+  reference_images?: string[];
+  credit_cost: number;
+  status: "pending" | "queued" | "processing" | "success" | "failed";
+  error_message?: string;
+  created_at: string;
+  videos: VideoResult[];
+}
+
+export type VideoSceneAvailabilityMode = "both" | "text_to_video" | "image_to_video";
+export type VideoGenerationMode = "text_to_video" | "image_to_video";
+
+export interface VideoTaskSceneConfig {
+  scene_key: string;
+  scene_label: string;
+  scene_description: string;
+  display_name: string;
+  subtitle: string;
+  sort_order: number;
+  hide_aspect_ratio: boolean;
+  hide_duration: boolean;
+  hide_resolution: boolean;
+  availability_mode: VideoSceneAvailabilityMode;
+  availability_modes: VideoGenerationMode[];
+  max_reference_images: number;
+  credit_billing_mode: "fixed" | "per_second";
+  credit_cost: number;
+  per_second_credit_cost: number;
+  aspect_ratio_options: SceneOptionItem[];
+  resolution_credit_costs: Record<string, number>;
+  duration_options: SceneOptionItem[];
+  resolution_options: SceneOptionItem[];
 }
 
 export interface UserAssetUploadSessionResponse {

@@ -13,6 +13,7 @@ import type {
   AdminConfig,
   CosConfig,
   AdminUser,
+  UserCanvasListResponse,
   AdminUserListResponse,
   AdminPaymentOrder,
   CreditLog,
@@ -90,6 +91,21 @@ export function listUsersPage(params: {
 
 export function listUserOptions(params?: { keyword?: string; limit?: number }): Promise<AdminUser[]> {
   return client.get("/admin/user-options", { params });
+}
+
+export function getAdminCanvases(
+  page = 1,
+  pageSize = 20,
+  filters?: { keyword?: string; userId?: string }
+): Promise<UserCanvasListResponse> {
+  return client.get("/admin/canvases", {
+    params: {
+      page,
+      page_size: pageSize,
+      keyword: filters?.keyword || undefined,
+      user_id: filters?.userId || undefined,
+    },
+  });
 }
 
 export function getAdminUserDetail(userId: string): Promise<AdminUser> {

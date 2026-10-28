@@ -72,6 +72,10 @@ PROMPT_OPTIMIZE_HISTORY_ITEM_TYPE = "prompt_optimize_task"
 PROMPT_OPTIMIZE_IMAGE_ID_OFFSET = 1_000_000_000
 
 
+def _exclude_example_template_seed_task_clause():
+    return Task.is_example_template_seed.is_(False)
+
+
 def _parse_refs(raw: str | None) -> list[str]:
     if not raw:
         return []
@@ -1082,6 +1086,7 @@ def get_all_history(
         db.query(Task)
         .join(User, User.id == Task.user_id)
         .filter(User.role != "superadmin", User.is_whitelisted.is_(False))
+        .filter(_exclude_example_template_seed_task_clause())
     )
     reverse_query = (
         db.query(CreditLog)
@@ -1327,6 +1332,7 @@ def get_admin_history_cards(
         .filter(User.role != "superadmin")
         .filter(User.is_whitelisted.is_(False))
         .filter(Task.is_deleted.is_(False))
+        .filter(_exclude_example_template_seed_task_clause())
     )
     prompt_reverse_query = None
     prompt_optimize_query = None

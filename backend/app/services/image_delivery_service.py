@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from urllib.parse import urlparse, urlunparse
 
 from fastapi import HTTPException
@@ -185,6 +186,16 @@ def serialize_image(image: Image, *, cos_config: CosRuntimeConfig | None = None)
     }
 
 
+def _parse_reference_images(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    try:
+        refs = json.loads(raw)
+        return refs if isinstance(refs, list) else []
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
 def serialize_task(
     task: Task,
     *,
@@ -198,6 +209,9 @@ def serialize_task(
     elif task.status == "failed" and task_credit_cost > 0:
         db = Session.object_session(task)
         resolved_credit_refunded = bool(db and is_task_generation_failure_credit_refunded(db, task.id))
+    source_asset = serialize_asset_urls(task.source_image or "", cos_config=cos_config)
+    mask_asset = serialize_asset_urls(task.mask_image or "", cos_config=cos_config)
+    reference_assets = [serialize_asset_urls(ref, cos_config=cos_config) for ref in _parse_reference_images(task.reference_images)]
 
     return {
         "id": task_external_id(task),
@@ -209,6 +223,12 @@ def serialize_task(
         "size": task.size,
         "resolution": task.resolution or "",
         "custom_size": task.custom_size or "",
+        "reference_images": [asset["image_url"] for asset in reference_assets],
+        "reference_image_thumbs": [asset["thumb_url"] for asset in reference_assets],
+        "source_image": source_asset["image_url"],
+        "source_image_thumb": source_asset["thumb_url"],
+        "mask_image": mask_asset["image_url"],
+        "mask_image_thumb": mask_asset["thumb_url"],
         "credit_cost": task_credit_cost,
         "credit_refunded": resolved_credit_refunded,
         "status": task.status,
