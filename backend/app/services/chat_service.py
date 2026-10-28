@@ -286,7 +286,7 @@ def list_sessions(
             ChatSession.is_deleted.is_(False),
         )
         .order_by(
-            func.coalesce(ChatSession.last_message_at, ChatSession.updated_at, ChatSession.created_at).desc(),
+            ChatSession.last_message_at.desc(),
             ChatSession.id.desc(),
         )
         .offset((normalized_page - 1) * normalized_page_size)

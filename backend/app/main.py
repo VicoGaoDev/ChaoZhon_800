@@ -869,6 +869,20 @@ def _ensure_payment_order_schema():
             conn.execute(text("ALTER TABLE payment_orders ADD COLUMN closed_at DATETIME NULL AFTER credited_at"))
         if "failed_at" not in payment_columns:
             conn.execute(text("ALTER TABLE payment_orders ADD COLUMN failed_at DATETIME NULL AFTER closed_at"))
+    _ensure_named_indexes("payment_orders", [
+        (
+            "idx_payment_orders_created_id",
+            "CREATE INDEX idx_payment_orders_created_id ON payment_orders (created_at, id)",
+        ),
+        (
+            "idx_payment_orders_status_created_id",
+            "CREATE INDEX idx_payment_orders_status_created_id ON payment_orders (status, created_at, id)",
+        ),
+        (
+            "idx_payment_orders_reconcile_scan",
+            "CREATE INDEX idx_payment_orders_reconcile_scan ON payment_orders (created_at, id, status, reconcile_until_at, order_no)",
+        ),
+    ])
 
 
 def _ensure_payment_reconcile_scan_run_schema():
@@ -2103,6 +2117,8 @@ def _ensure_chat_schema():
                     conn.execute(text("CREATE UNIQUE INDEX uq_chat_sessions_session_id ON chat_sessions (session_id)"))
                 except Exception:
                     pass
+            if "idx_chat_sessions_user_last_message_id" not in session_indexes:
+                conn.execute(text("CREATE INDEX idx_chat_sessions_user_last_message_id ON chat_sessions (user_id, is_deleted, last_message_at, id)"))
 
 
 upload_path = Path(settings.UPLOAD_DIR)
