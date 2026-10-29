@@ -33,6 +33,7 @@ const pagination = reactive({
   pageSize: 20,
   total: 0,
 });
+const totalAmountYuan = ref(0);
 
 const columns = [
   { title: "订单", key: "order", width: "23%" },
@@ -143,6 +144,7 @@ async function load() {
     });
     items.value = res.items;
     pagination.total = res.total;
+    totalAmountYuan.value = Number(res.total_amount_yuan || 0);
   } catch (err: any) {
     message.error(err.response?.data?.detail || "获取购买订单失败");
   } finally {
@@ -286,6 +288,10 @@ onMounted(load);
       </div>
       <a-button type="primary" class="analytics-action-btn action-btn" @click="handleFilter">筛选</a-button>
       <a-button class="analytics-action-btn analytics-action-btn-secondary action-btn" @click="handleReset">重置</a-button>
+      <div class="payment-order-filter-total">
+        <span class="payment-order-filter-total-label">合计金额</span>
+        <span class="payment-order-filter-total-value">{{ formatMoney(totalAmountYuan) }}</span>
+      </div>
     </div>
 
     <div class="warm-card warm-table-card motion-fade-up motion-card-lift" style="--motion-delay: 180ms">
@@ -516,6 +522,29 @@ onMounted(load);
   flex: 0 0 auto;
 }
 
+.payment-order-filter-total {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 148px;
+  padding: 0 4px;
+  white-space: nowrap;
+}
+
+.payment-order-filter-total-label {
+  color: var(--theme-text-secondary);
+  font-size: 13px;
+}
+
+.payment-order-filter-total-value {
+  color: var(--theme-title);
+  font-size: 18px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
 .id-cell {
   display: inline-flex;
   align-items: center;
@@ -731,6 +760,12 @@ onMounted(load);
 @media (max-width: 768px) {
   .header-actions {
     width: 100%;
+    justify-content: flex-start;
+  }
+
+  .payment-order-filter-total {
+    width: 100%;
+    margin-left: 0;
     justify-content: flex-start;
   }
 

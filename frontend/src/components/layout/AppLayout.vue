@@ -1862,7 +1862,6 @@ watch(purchaseDialogOpen, (open) => {
         </div>
         <ul class="credits-contact-list">
           <li>积分获取</li>
-          <li>API调用</li>
           <li>技术支持</li>
           <li>需求定制</li>
         </ul>

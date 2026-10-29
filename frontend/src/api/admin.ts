@@ -173,7 +173,7 @@ export function listPaymentOrders(params: {
   status?: AdminPaymentOrder["status"];
   start_date?: string;
   end_date?: string;
-}): Promise<{ total: number; items: AdminPaymentOrder[] }> {
+}): Promise<{ total: number; total_amount_fen?: number; total_amount_yuan?: number; items: AdminPaymentOrder[] }> {
   return client.get("/admin/payment-orders", { params });
 }
 

@@ -5,6 +5,7 @@ import dayjs from "dayjs";
 import { useRoute, useRouter } from "vue-router";
 import {
   FontSizeOutlined,
+  CheckOutlined,
   CloseOutlined,
   CloudUploadOutlined,
   ClearOutlined,
@@ -29,6 +30,7 @@ import {
   DoubleLeftOutlined,
   DoubleRightOutlined,
   DownOutlined,
+  ExpandOutlined,
   FilterOutlined,
   CalendarOutlined,
   UndoOutlined,
@@ -67,9 +69,11 @@ import GenerateCameraPicker from "@/components/generate/GenerateCameraPicker.vue
 import GenerateStylePicker from "@/components/generate/GenerateStylePicker.vue";
 import GenerateStyleTags from "@/components/generate/GenerateStyleTags.vue";
 import OptionGridPicker from "@/components/generate/OptionGridPicker.vue";
+import ImageEditEmptyGuide from "@/components/generate/ImageEditEmptyGuide.vue";
 import { type GenerateCameraSelection } from "@/lib/generateCameras";
 import { composeGeneratePrompt, parseGeneratePrompt } from "@/lib/generateStyles";
 import NavGenerateImageIcon from "@/components/icons/NavGenerateImageIcon.vue";
+import SketchBoardIcon from "@/components/icons/SketchBoardIcon.vue";
 import PromptInterceptionTip from "@/components/generate/PromptInterceptionTip.vue";
 import { withBaseUrl } from "@/lib/assets";
 import {
@@ -97,7 +101,9 @@ const loginModalVisible = inject<Ref<boolean>>("loginModalVisible")!;
 const openPurchaseEntry = inject<() => void>("openPurchaseEntry");
 const RepaintCanvas = defineAsyncComponent(() => import("@/components/generate/RepaintCanvas.vue"));
 const PromptOptimizeStyleDialog = defineAsyncComponent(() => import("@/components/generate/PromptOptimizeStyleDialog.vue"));
+const PromptExpandDialog = defineAsyncComponent(() => import("@/components/generate/PromptExpandDialog.vue"));
 const UserAssetPicker = defineAsyncComponent(() => import("@/components/assets/UserAssetPicker.vue"));
+const SketchBoardDialog = defineAsyncComponent(() => import("@/components/generate/SketchBoardDialog.vue"));
 const UserPromptLibraryModal = defineAsyncComponent(() => import("@/components/prompts/UserPromptLibraryModal.vue"));
 const FeedbackDialog = defineAsyncComponent(() => import("@/components/feedback/FeedbackDialog.vue"));
 const HistoryDetailDialog = defineAsyncComponent(() => import("@/components/history/HistoryDetailDialog.vue"));
@@ -267,6 +273,8 @@ interface UploadPreviewItem {
 const DEFAULT_MAX_REFERENCE_IMAGES = 6;
 const referenceItems = ref<UploadPreviewItem[]>([]);
 const assetPickerOpen = ref(false);
+const sketchBoardOpen = ref(false);
+const pickingGeneratedReference = ref(false);
 const fileInput = ref<HTMLInputElement | null>(null);
 const referenceUploadBlockRef = ref<HTMLElement | null>(null);
 const referenceDragActive = ref(false);
@@ -1761,8 +1769,117 @@ function addLibraryAssetToReference(asset: UserAsset) {
   return true;
 }
 
+function getGeneratedImageReferenceUrl(img: ImageResult) {
+  return (img.image_url || img.preview_url || img.thumb_url || "").trim();
+}
+
+function isGeneratedImageAlreadyReferenced(img: ImageResult) {
+  const url = getGeneratedImageReferenceUrl(img);
+  return !!url && referenceItems.value.some((item) => item.remoteUrl === url);
+}
+
+function canShowGeneratedReferenceAdd(task: GeneratedTaskItem, img: ImageResult) {
+  return pickingGeneratedReference.value
+    && isImageEditMode.value
+    && canEditGeneratedImage(task, img);
+}
+
+function getScrollableAncestor(el: HTMLElement) {
+  let parent = el.parentElement;
+  while (parent) {
+    const { overflowY } = getComputedStyle(parent);
+    const canScroll = (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay")
+      && parent.scrollHeight > parent.clientHeight + 1;
+    if (canScroll) return parent;
+    parent = parent.parentElement;
+  }
+  return (document.scrollingElement as HTMLElement | null) || document.documentElement;
+}
+
+function scrollGeneratedResultsIntoViewOnMobile() {
+  if (viewportWidth.value > 960) return;
+  const target = resultBodyRef.value;
+  if (!target) return;
+  const scroller = getScrollableAncestor(target);
+  const isDocumentScroller = scroller === document.documentElement || scroller === document.body;
+  const offset = isDocumentScroller ? 80 : 8;
+  const scrollerRect = scroller.getBoundingClientRect();
+  const targetRect = target.getBoundingClientRect();
+  const nextTop = scroller.scrollTop + (targetRect.top - scrollerRect.top) - offset;
+  scroller.scrollTo({ top: Math.max(0, nextTop), behavior: "smooth" });
+}
+
+async function togglePickingGeneratedReference() {
+  if (pickingGeneratedReference.value) {
+    pickingGeneratedReference.value = false;
+    return;
+  }
+  if (!(await ensureAuthenticated())) return;
+  if (!isImageEditMode.value) return;
+  if (referenceItems.value.length >= maxReferenceImages.value) {
+    message.warning(`当前模型最多支持 ${maxReferenceImages.value} 张参考图`);
+    return;
+  }
+  const hasPickable = resultItems.value.some((item) => canEditGeneratedImage(item.task, item.image));
+  if (!hasPickable) {
+    message.warning("暂无已生成图片可添加");
+    return;
+  }
+  pickingGeneratedReference.value = true;
+  void nextTick(() => {
+    requestAnimationFrame(() => {
+      scrollGeneratedResultsIntoViewOnMobile();
+    });
+  });
+}
+
+function toggleGeneratedImageAsReference(task: GeneratedTaskItem, img: ImageResult) {
+  const imageUrl = getGeneratedImageReferenceUrl(img);
+  if (!imageUrl) {
+    message.warning("当前结果图暂不可添加为参考图");
+    return;
+  }
+  const existingIndex = referenceItems.value.findIndex((item) => item.remoteUrl === imageUrl);
+  if (existingIndex !== -1) {
+    removeReference(existingIndex);
+    return;
+  }
+  const limit = maxReferenceImages.value;
+  if (referenceItems.value.length >= limit) {
+    message.warning(`当前模型最多支持 ${limit} 张参考图`);
+    return;
+  }
+  const shouldAutoDetect = referenceItems.value.length === 0;
+  referenceItems.value.push({
+    id: `generated-${task.localId}-${img.id || Date.now()}`,
+    localUrl: img.thumb_url || img.preview_url || imageUrl,
+    remoteUrl: imageUrl,
+    status: "success",
+  });
+  if (shouldAutoDetect) {
+    void maybeAutoDetectAspectRatioFromFirstReference(imageUrl);
+  }
+}
+
+watch(isImageEditMode, (isImageEdit) => {
+  if (!isImageEdit) pickingGeneratedReference.value = false;
+});
+
 async function handlePickUserAsset(asset: UserAsset) {
   if (addLibraryAssetToReference(asset)) {
+    assetPickerOpen.value = false;
+  }
+}
+
+async function handlePickUserAssets(assets: UserAsset[]) {
+  const uniqueAssets = assets.filter((asset, index, list) => (
+    list.findIndex((item) => item.image_url === asset.image_url) === index
+  ));
+  let added = 0;
+  for (const asset of uniqueAssets) {
+    if (addLibraryAssetToReference(asset)) added += 1;
+  }
+  if (added > 0) {
     assetPickerOpen.value = false;
   }
 }
@@ -1770,6 +1887,20 @@ async function handlePickUserAsset(asset: UserAsset) {
 async function openAssetPicker() {
   if (!(await ensureAuthenticated())) return;
   assetPickerOpen.value = true;
+}
+
+async function openSketchBoard() {
+  if (!(await ensureAuthenticated())) return;
+  if (referenceItems.value.length >= maxReferenceImages.value) {
+    message.warning(`当前模型最多支持 ${maxReferenceImages.value} 张参考图`);
+    return;
+  }
+  sketchBoardOpen.value = true;
+}
+
+function handleSketchBoardConfirm(file: File) {
+  sketchBoardOpen.value = false;
+  void uploadReferenceFiles([file]);
 }
 
 function isImageUploadTooLarge(file: File) {
@@ -2236,6 +2367,32 @@ const isPromptOptimizeOnRepaintPrompt = computed(() => (
 
 function getPromptOptimizeTarget(): PromptOptimizeTarget {
   return generateMode.value === "inpaint" ? "repaintPrompt" : "prompt";
+}
+
+const promptExpandOpen = ref(false);
+const promptExpandTarget = ref<PromptOptimizeTarget>("prompt");
+const promptExpandValue = computed(() => (
+  promptExpandTarget.value === "repaintPrompt" ? repaintPrompt.value : prompt.value
+));
+const promptExpandPlaceholder = computed(() => (
+  promptExpandTarget.value === "repaintPrompt"
+    ? "描述需要局部重绘后的效果..."
+    : "描述您想要生成的图片..."
+));
+
+function openPromptExpand(target: PromptOptimizeTarget) {
+  if (target === "prompt" && isPromptOptimizeOnMainPrompt.value) return;
+  if (target === "repaintPrompt" && isPromptOptimizeOnRepaintPrompt.value) return;
+  promptExpandTarget.value = target;
+  promptExpandOpen.value = true;
+}
+
+function applyExpandedPrompt(value: string) {
+  if (promptExpandTarget.value === "repaintPrompt") {
+    repaintPrompt.value = value;
+    return;
+  }
+  prompt.value = value;
 }
 
 async function runPromptOptimize(
@@ -3557,6 +3714,19 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
                     :readonly="isPromptOptimizeOnMainPrompt"
                     show-count
                   />
+                  <a-tooltip title="放大编辑">
+                    <span class="prompt-expand-btn-wrap">
+                      <button
+                        type="button"
+                        class="prompt-expand-btn"
+                        aria-label="放大编辑"
+                        :disabled="isPromptOptimizeOnMainPrompt"
+                        @click="openPromptExpand('prompt')"
+                      >
+                        <ExpandOutlined />
+                      </button>
+                    </span>
+                  </a-tooltip>
                   <div v-if="isPromptOptimizeOnMainPrompt" class="prompt-optimize-status">
                     <div class="prompt-optimize-status-text">
                       <LoadingOutlined spin />
@@ -3892,17 +4062,53 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
 
                   <div
                     v-if="referenceItems.length < maxReferenceImages"
-                    class="upload-add"
-                    @click="triggerUpload"
+                    class="upload-add-group"
+                    :class="{
+                      'is-picking': pickingGeneratedReference,
+                      'has-thumbs': referenceItems.length > 0,
+                    }"
                   >
-                    <a-spin
-                      v-if="uploading"
-                      :indicator="h(LoadingOutlined, { style: accentIndicatorStyle })"
-                    />
-                    <template v-else>
-                      <CloudUploadOutlined style="font-size: 22px; color: var(--theme-accent)" />
-                      <span>{{ referenceDragActive ? "松开上传" : "拖拽或点击" }}</span>
-                    </template>
+                    <div class="upload-add" @click="triggerUpload">
+                      <a-spin
+                        v-if="uploading"
+                        :indicator="h(LoadingOutlined, { style: accentIndicatorStyle })"
+                      />
+                      <template v-else>
+                        <CloudUploadOutlined class="upload-add-icon" style="font-size: 22px" />
+                        <span>{{ referenceDragActive ? "松开上传" : "拖拽或点击" }}</span>
+                      </template>
+                    </div>
+                    <div class="upload-add-extras">
+                      <button
+                        type="button"
+                        class="upload-add upload-add-extra upload-add-assets"
+                        title="我的素材"
+                        @click.stop="openAssetPicker"
+                      >
+                        <NavGenerateImageIcon class="upload-add-icon" />
+                        <span>我的素材</span>
+                      </button>
+                      <button
+                        type="button"
+                        class="upload-add upload-add-extra upload-add-from-generated"
+                        :class="{ active: pickingGeneratedReference }"
+                        :title="pickingGeneratedReference ? '点击可取消' : '已生成图片中选择'"
+                        @click.stop="togglePickingGeneratedReference"
+                      >
+                        <PlusOutlined class="upload-add-icon" style="font-size: 20px" />
+                        <span v-if="pickingGeneratedReference">点击可取消</span>
+                        <span v-else>已生成图<br>片中选择</span>
+                      </button>
+                      <button
+                        type="button"
+                        class="upload-add upload-add-extra"
+                        title="画板"
+                        @click.stop="openSketchBoard"
+                      >
+                        <SketchBoardIcon class="upload-add-icon" />
+                        <span>画板</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -3968,6 +4174,19 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
                     :readonly="isPromptOptimizeOnMainPrompt"
                     show-count
                   />
+                  <a-tooltip title="放大编辑">
+                    <span class="prompt-expand-btn-wrap">
+                      <button
+                        type="button"
+                        class="prompt-expand-btn"
+                        aria-label="放大编辑"
+                        :disabled="isPromptOptimizeOnMainPrompt"
+                        @click="openPromptExpand('prompt')"
+                      >
+                        <ExpandOutlined />
+                      </button>
+                    </span>
+                  </a-tooltip>
                   <div v-if="isPromptOptimizeOnMainPrompt" class="prompt-optimize-status">
                     <div class="prompt-optimize-status-text">
                       <LoadingOutlined spin />
@@ -4436,6 +4655,19 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
                     :readonly="isPromptOptimizeOnRepaintPrompt"
                     show-count
                   />
+                  <a-tooltip title="放大编辑">
+                    <span class="prompt-expand-btn-wrap">
+                      <button
+                        type="button"
+                        class="prompt-expand-btn"
+                        aria-label="放大编辑"
+                        :disabled="isPromptOptimizeOnRepaintPrompt"
+                        @click="openPromptExpand('repaintPrompt')"
+                      >
+                        <ExpandOutlined />
+                      </button>
+                    </span>
+                  </a-tooltip>
                   <div v-if="isPromptOptimizeOnRepaintPrompt" class="prompt-optimize-status">
                     <div class="prompt-optimize-status-text">
                       <LoadingOutlined spin />
@@ -4695,6 +4927,10 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
           </div>
         </div>
 
+        <div v-if="pickingGeneratedReference" class="result-pick-reference-bar">
+          <span>点击图片中间的 + 添加到参考图，再次点击可取消</span>
+          <button type="button" class="result-pick-reference-done" @click="pickingGeneratedReference = false">完成</button>
+        </div>
         <div ref="resultBodyRef" class="result-body" @scroll="handleGeneratedTaskResultScroll">
           <div v-if="generatedTasksLoading && !resultItems.length" class="result-empty result-loading-state">
             <a-spin :indicator="h(LoadingOutlined, { style: neutralIndicatorStyle })" />
@@ -4713,7 +4949,10 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
                     '--generate-result-delay': `${Math.min(index, 9) * 45}ms`,
                     '--result-pending-bg-image': `url('${generateEmptyStateAsset}')`,
                   }"
-                  :class="{ pending: item.image.status === 'pending' }"
+                  :class="{
+                    pending: item.image.status === 'pending',
+                    'is-picking-reference': canShowGeneratedReferenceAdd(item.task, item.image),
+                  }"
                   @mouseleave="collapseGeneratedResultMore(item)"
                 >
                   <div
@@ -4903,6 +5142,17 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
                         </a-tooltip>
                       </div>
                     </template>
+                    <button
+                      v-if="canShowGeneratedReferenceAdd(item.task, item.image)"
+                      type="button"
+                      class="generated-reference-pick"
+                      :class="{ selected: isGeneratedImageAlreadyReferenced(item.image) }"
+                      :aria-label="isGeneratedImageAlreadyReferenced(item.image) ? '从参考图移除' : '添加到参考图'"
+                      @click.stop="toggleGeneratedImageAsReference(item.task, item.image)"
+                    >
+                      <CheckOutlined v-if="isGeneratedImageAlreadyReferenced(item.image)" />
+                      <PlusOutlined v-else />
+                    </button>
                   </div>
                 </div>
               </TransitionGroup>
@@ -4925,9 +5175,14 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
             </div>
           </template>
 
-          <div v-else class="result-empty">
+          <div v-else class="result-empty" :class="{ 'is-image-edit-guide': isImageEditMode || isTextGenerateMode }">
             <transition name="generate-panel-slide" mode="out-in">
-              <div :key="generateMode" class="result-empty-copy">
+              <ImageEditEmptyGuide
+                v-if="isImageEditMode || isTextGenerateMode"
+                :key="generateMode"
+                :mode="isTextGenerateMode ? 'textGenerate' : 'imageEdit'"
+              />
+              <div v-else :key="generateMode" class="result-empty-copy">
                 <div class="empty-illustration-shell">
                   <img
                     :src="generateEmptyStateAsset"
@@ -4981,6 +5236,12 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
       v-model:open="assetPickerOpen"
       title="选择个人素材"
       @select-asset="handlePickUserAsset"
+      @select-assets="handlePickUserAssets"
+    />
+    <SketchBoardDialog
+      v-if="sketchBoardOpen"
+      v-model:open="sketchBoardOpen"
+      @confirm="handleSketchBoardConfirm"
     />
     <HistoryDetailDialog
       v-if="detailOpen"
@@ -5001,6 +5262,14 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
       v-model:open="promptOptimizeStyleDialogOpen"
       @confirm="handlePromptOptimizeStyleConfirm"
       @update:open="(value) => { if (!value) closePromptOptimizeStyleDialog(); }"
+    />
+    <PromptExpandDialog
+      v-model:open="promptExpandOpen"
+      :value="promptExpandValue"
+      :draft-key="promptExpandTarget"
+      :maxlength="TASK_PROMPT_MAX_LENGTH"
+      :placeholder="promptExpandPlaceholder"
+      @confirm="applyExpandedPrompt"
     />
   </div>
 </template>
@@ -5529,6 +5798,38 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
 
 .prompt-input-wrap {
   position: relative;
+}
+
+.prompt-expand-btn-wrap {
+  position: absolute;
+  right: 8px;
+  bottom: 28px;
+  z-index: 2;
+}
+
+.prompt-expand-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--theme-text-secondary, #8b7457);
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.prompt-expand-btn:hover:not(:disabled) {
+  background: var(--theme-panel-bg-muted, rgba(0, 0, 0, 0.05));
+  color: var(--theme-title, #3d2f22);
+}
+
+.prompt-expand-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .prompt-input-wrap.has-style-tags .prompt-input :deep(textarea) {
@@ -6105,6 +6406,111 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
 
   &:active {
     transform: scale(0.96);
+  }
+}
+
+.generate-config-panel .upload-add-icon {
+  color: currentColor;
+}
+
+.generate-config-panel .upload-add-group {
+  position: relative;
+  z-index: 4;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+}
+
+.generate-config-panel .upload-add-group > .upload-add:hover {
+  transform: none;
+}
+
+.generate-config-panel .upload-add-extras {
+  position: absolute;
+  left: 100%;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding-left: 8px;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.generate-config-panel .upload-add-group:hover .upload-add-extras,
+.generate-config-panel .upload-add-group:focus-within .upload-add-extras,
+.generate-config-panel .upload-add-group.is-picking .upload-add-extras {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.generate-config-panel .upload-add-group.has-thumbs .upload-add-extras {
+  left: auto;
+  right: 0;
+  top: 100%;
+  padding-left: 0;
+  padding-top: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: min(340px, 100cqw);
+}
+
+.generate-config-panel .upload-add-extra {
+  padding: 6px;
+  font-size: 11px;
+  line-height: 1.25;
+  text-align: center;
+
+  :deep(.anticon),
+  :deep(.nav-generate-image-icon),
+  :deep(.sketch-board-icon) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    width: 20px;
+    height: 20px;
+
+    svg {
+      display: block;
+      width: 20px;
+      height: 20px;
+    }
+  }
+
+  :deep(.sketch-board-icon),
+  :deep(.sketch-board-icon svg) {
+    width: 17px;
+    height: 17px;
+    font-size: 17px;
+  }
+}
+
+.generate-config-panel .upload-add-from-generated.active {
+  border-color: var(--theme-accent);
+  color: var(--theme-accent-text);
+}
+
+.generate-config-panel .upload-add-assets span {
+  white-space: nowrap;
+}
+
+@media (hover: none) {
+  .generate-config-panel .upload-add-group {
+    gap: 8px;
+  }
+
+  .generate-config-panel .upload-add-extras {
+    position: static;
+    left: auto;
+    top: auto;
+    padding-left: 0;
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
   }
 }
 
@@ -7640,6 +8046,87 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
   transform: scale(1.03);
 }
 
+.result-card.is-picking-reference .result-actions,
+.result-card.is-picking-reference .result-top-actions {
+  display: none;
+}
+
+.result-card.is-picking-reference:hover .result-actions,
+.result-card.is-picking-reference:focus-within .result-actions,
+.result-card.is-picking-reference:hover .result-more-trigger.icon-chip,
+.result-card.is-picking-reference:focus-within .result-more-trigger.icon-chip,
+.result-card.is-picking-reference:hover .result-delete-trigger.icon-chip,
+.result-card.is-picking-reference:focus-within .result-delete-trigger.icon-chip {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+.generated-reference-pick {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #111;
+  font-size: 28px;
+  cursor: pointer;
+
+  :deep(.anticon) {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.9);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+    transition:
+      transform var(--motion-duration-fast) var(--motion-ease-soft),
+      background var(--motion-duration-fast) var(--motion-ease-soft);
+  }
+
+  &:hover :deep(.anticon) {
+    transform: scale(1.06);
+    background: #fff;
+  }
+
+  &.selected :deep(.anticon) {
+    background: var(--theme-accent);
+    color: #fff;
+  }
+}
+
+.result-pick-reference-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 6px 0 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--theme-accent) 10%, var(--theme-panel-bg));
+  border: 1px solid color-mix(in srgb, var(--theme-accent) 28%, var(--theme-panel-border));
+  color: var(--theme-title);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.result-pick-reference-done {
+  flex: 0 0 auto;
+  padding: 4px 12px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--theme-accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
 .failed-image {
   object-fit: contain !important;
   padding: 28px;
@@ -7982,6 +8469,12 @@ html:is([data-theme="dark"], [data-theme="midnight"]) .generate-page .result-mor
   justify-content: center;
   padding: 8px 20px 28px;
   animation: generate-fade-up var(--motion-duration-reveal) var(--motion-ease-enter) 0.2s both;
+}
+
+.result-empty.is-image-edit-guide {
+  justify-content: center;
+  align-items: center;
+  padding: 8px 20px 16px;
 }
 
 .result-empty-copy {

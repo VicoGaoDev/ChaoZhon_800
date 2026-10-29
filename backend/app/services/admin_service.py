@@ -656,6 +656,9 @@ def list_payment_orders(
         query = query.filter(PaymentOrder.created_at <= end_date)
 
     total = query.count()
+    total_amount_fen = int(
+        query.with_entities(func.coalesce(func.sum(PaymentOrder.amount_fen), 0)).scalar() or 0
+    )
     rows = (
         query
         .order_by(PaymentOrder.created_at.desc(), PaymentOrder.id.desc())
@@ -691,7 +694,12 @@ def list_payment_orders(
                 "updated_at": order.updated_at,
             }
         )
-    return {"total": total, "items": items}
+    return {
+        "total": total,
+        "total_amount_fen": total_amount_fen,
+        "total_amount_yuan": round(total_amount_fen / 100, 2),
+        "items": items,
+    }
 
 
 def get_stats(db: Session) -> dict:
