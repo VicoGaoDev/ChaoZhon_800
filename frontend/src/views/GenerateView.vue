@@ -75,6 +75,7 @@ import { composeGeneratePrompt, parseGeneratePrompt } from "@/lib/generateStyles
 import NavGenerateImageIcon from "@/components/icons/NavGenerateImageIcon.vue";
 import SketchBoardIcon from "@/components/icons/SketchBoardIcon.vue";
 import PromptInterceptionTip from "@/components/generate/PromptInterceptionTip.vue";
+import { usePointerSortableList } from "@/composables/usePointerSortableList";
 import { withBaseUrl } from "@/lib/assets";
 import {
   getAssetQuotaFullMessage,
@@ -279,6 +280,15 @@ const fileInput = ref<HTMLInputElement | null>(null);
 const referenceUploadBlockRef = ref<HTMLElement | null>(null);
 const referenceDragActive = ref(false);
 const referenceDragCounter = ref(0);
+const {
+  draggingId: draggingReferenceId,
+  dragOverId: dragOverReferenceId,
+  isSorting: isSortingReferences,
+  onPointerDown: handleReferenceThumbPointerDown,
+  consumeSuppressedClick: consumeReferenceThumbClick,
+} = usePointerSortableList(referenceItems, {
+  container: referenceUploadBlockRef,
+});
 let unbindReferenceDragHandlers: (() => void) | null = null;
 const sourceImageUrl = ref("");
 const sourcePreviewUrl = ref("");
@@ -2158,6 +2168,11 @@ function removeReference(index: number) {
   referenceItems.value.splice(index, 1);
 }
 
+function handleReferenceThumbClick(item: UploadPreviewItem) {
+  if (consumeReferenceThumbClick()) return;
+  handlePreview(getReferencePreviewUrl(item));
+}
+
 function triggerSourceUpload() {
   if (!auth.isLoggedIn) {
     loginModalVisible.value = true;
@@ -4000,7 +4015,7 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
                 <div class="panel-head">
                   <div class="panel-head-main">
                     <h3>参考图</h3>
-                    <span class="panel-hint">(最多 {{ maxReferenceImages }} 张<span class="panel-hint-extra">，支持拖拽、粘贴上传</span>)</span>
+                    <span class="panel-hint">(最多 {{ maxReferenceImages }} 张<span class="panel-hint-extra">，支持拖拽排序、拖拽/粘贴上传</span>)</span>
                   </div>
                   <div class="panel-head-actions">
                     <a-tooltip title="我的素材">
@@ -4020,14 +4035,21 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
                   @change="handleFileChange"
                 />
 
-                <div class="upload-grid">
+                <div class="upload-grid" :class="{ 'is-sorting': isSortingReferences }">
                   <div
                     v-for="(item, idx) in referenceItems"
                     :key="item.id"
                     class="upload-thumb"
-                    @click="handlePreview(getReferencePreviewUrl(item))"
+                    :class="{
+                      'is-dragging': draggingReferenceId === item.id,
+                      'is-drag-over': dragOverReferenceId === item.id && draggingReferenceId !== item.id,
+                    }"
+                    :data-sortable-id="item.id"
+                    title="拖动调整顺序，点击预览"
+                    @pointerdown="handleReferenceThumbPointerDown($event, idx)"
+                    @click="handleReferenceThumbClick(item)"
                   >
-                    <img :src="getReferencePreviewUrl(item)" alt="参考图" />
+                    <img :src="getReferencePreviewUrl(item)" alt="参考图" draggable="false" />
                     <div v-if="item.status !== 'success'" class="upload-thumb-mask" :class="{ error: item.status === 'failed' }">
                       <a-spin
                         v-if="item.status === 'uploading'"
@@ -6270,18 +6292,22 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
   border: 1px solid var(--theme-panel-border);
   background: linear-gradient(180deg, var(--theme-panel-bg), var(--theme-panel-bg-soft));
   flex-shrink: 0;
-  cursor: zoom-in;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
   box-shadow: 0 8px 18px var(--theme-shadow-soft);
   transition:
     transform var(--motion-duration-swift) var(--motion-ease-soft),
     box-shadow var(--motion-duration-swift) var(--motion-ease-soft),
-    border-color var(--motion-duration-swift) var(--motion-ease-soft);
+    border-color var(--motion-duration-swift) var(--motion-ease-soft),
+    opacity var(--motion-duration-swift) var(--motion-ease-soft);
 
   img {
     width: 100%;
     height: 100%;
     object-fit: cover;
     display: block;
+    pointer-events: none;
     transition: transform var(--motion-duration-hover) var(--motion-ease-enter);
   }
 
@@ -6293,6 +6319,31 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
 
   &:hover img {
     transform: scale(1.04);
+  }
+
+  &.is-dragging {
+    z-index: 5;
+    cursor: grabbing;
+    box-shadow: 0 16px 28px var(--theme-shadow-medium);
+  }
+
+  &.is-drag-over:not(.is-dragging) {
+    border-color: var(--theme-border-accent, var(--theme-accent));
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--theme-accent) 35%, transparent);
+  }
+}
+
+.generate-config-panel .upload-grid.is-sorting {
+  cursor: grabbing;
+
+  .upload-thumb {
+    transition: none;
+    will-change: transform;
+  }
+
+  .upload-thumb:hover,
+  .upload-thumb:hover img {
+    transform: none;
   }
 }
 
