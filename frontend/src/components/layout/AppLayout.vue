@@ -86,6 +86,7 @@ const isSuperAdmin = computed(() => auth.isSuperAdmin);
 const showRegisterPromoCode = true;
 const hideTopMenu = computed(() => route.meta.hideTopMenu === true);
 const isWorkbenchLayout = computed(() => route.meta.workbenchLayout === true);
+const isFluidContent = computed(() => route.path.startsWith("/admin/external-api-configs"));
 const isCanvasRoute = computed(() => route.path.startsWith("/canvas") || route.path.startsWith("/admin/user-canvases/"));
 const showDesktopSideNav = computed(() => !hideTopMenu.value || (isWorkbenchLayout.value && isCanvasRoute.value));
 const mobileDrawerOpen = ref(false);
@@ -1640,7 +1641,7 @@ watch(purchaseDialogOpen, (open) => {
         'app-content-desktop-side-nav': showDesktopSideNav,
       }"
     >
-      <div class="content-inner">
+      <div class="content-inner" :class="{ 'content-inner-fluid': isFluidContent }">
         <router-view v-slot="{ Component, route: currentRoute }">
           <transition :name="routeTransitionName" mode="out-in">
             <div :key="currentRoute.path" class="route-page-shell">
@@ -3223,6 +3224,13 @@ html:is([data-theme="dark"], [data-theme="midnight"]) .warm-dropdown .ant-dropdo
   --credits-purchase-accent-shadow: rgba(124, 58, 237, 0.28);
 }
 
+.credits-purchase-card-mega {
+  --credits-purchase-accent: #d4a017;
+  --credits-purchase-accent-start: #f6d365;
+  --credits-purchase-accent-end: #c68a00;
+  --credits-purchase-accent-shadow: rgba(212, 160, 23, 0.28);
+}
+
 .credits-purchase-price {
   display: inline-flex;
   align-items: flex-end;
@@ -3598,6 +3606,10 @@ html:is([data-theme="dark"], [data-theme="midnight"]) .warm-dropdown .ant-dropdo
   margin: 0 auto;
   position: relative;
   z-index: 1;
+}
+
+.content-inner-fluid {
+  max-width: none;
 }
 
 .route-page-shell {

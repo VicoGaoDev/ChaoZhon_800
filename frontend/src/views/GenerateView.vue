@@ -23,7 +23,7 @@ import {
   LoadingOutlined,
   ExperimentOutlined,
   PlusOutlined,
-  ExclamationCircleFilled,
+  InfoCircleFilled,
   RedoOutlined,
   ReloadOutlined,
   ThunderboltOutlined,
@@ -4738,10 +4738,17 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
                 <span>展开配置</span>
               </button>
             </a-tooltip>
-            <div class="result-tips">
-              <div class="result-tip-line">
-                每日前 10 次失败任务不扣积分
-              </div>
+            <div class="result-retain-badge">
+              <InfoCircleFilled class="result-retain-icon" />
+              <span class="result-retain-text">
+                <span class="result-retain-clause">
+                  每日前 <span class="result-tip-highlight">20</span> 次失败任务不扣积分
+                </span>
+                <span class="result-tip-divider">/</span>
+                <span class="result-retain-clause">
+                  历史记录保留原图 <span class="result-tip-highlight">15</span> 天
+                </span>
+              </span>
             </div>
           </div>
           <div class="result-head-meta">
@@ -4942,10 +4949,6 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
                 </div>
               </template>
             </a-popover>
-            <div class="result-retain-badge">
-              <ExclamationCircleFilled class="result-retain-icon" />
-              <span>服务器只保留原图15天</span>
-            </div>
           </div>
         </div>
 
@@ -7921,11 +7924,12 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
 }
 
 .result-retain-badge {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  height: 30px;
+  max-width: 100%;
+  height: 32px;
   padding: 0 14px;
   border-radius: 999px;
   background: linear-gradient(180deg, rgba(var(--theme-surface-strong-rgb), 0.96), rgba(var(--theme-page-base-rgb), 0.92));
@@ -7934,12 +7938,45 @@ watch(() => auth.isLoggedIn, (isLoggedIn) => {
   font-size: 12px;
   line-height: 1;
   white-space: nowrap;
+  overflow-x: auto;
   box-shadow: 0 10px 20px var(--theme-shadow-soft);
 }
 
+.result-retain-badge > .result-retain-text {
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
+}
+
+.result-retain-clause {
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
+}
+
+.result-retain-badge .result-tip-highlight {
+  display: inline-flex;
+  align-items: center;
+  margin: 0 4px;
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1;
+  color: #16a34a;
+}
+
 .result-retain-icon {
-  color: #e25555;
-  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--theme-icon, var(--theme-accent, #ffab24));
+  font-size: 16px;
+}
+
+.result-tip-divider {
+  display: inline-flex;
+  align-items: center;
+  margin: 0 8px;
+  line-height: 1;
+  color: var(--theme-text-secondary, #8b7457);
 }
 
 .result-tip-link {
@@ -9388,7 +9425,11 @@ html:is([data-theme="dark"], [data-theme="midnight"]) .generate-page .result-ret
 }
 
 html:is([data-theme="dark"], [data-theme="midnight"]) .generate-page .result-retain-icon {
-  color: var(--theme-accent) !important;
+  color: var(--theme-icon) !important;
+}
+
+html:is([data-theme="dark"], [data-theme="midnight"]) .generate-page .result-retain-badge .result-tip-highlight {
+  color: #4ade80;
 }
 
 html:is([data-theme="dark"], [data-theme="midnight"]) .generate-page .generate-btn,

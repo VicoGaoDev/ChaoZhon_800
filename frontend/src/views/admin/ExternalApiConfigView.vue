@@ -2,14 +2,11 @@
 import { computed, h, onMounted, reactive, ref, watch } from "vue";
 import { message, Modal } from "ant-design-vue";
 import {
-  CopyOutlined,
   DeleteOutlined,
+  DownOutlined,
   EditOutlined,
-  EyeInvisibleOutlined,
-  EyeOutlined,
   MoreOutlined,
   PlusOutlined,
-  SaveOutlined,
   SwapOutlined,
 } from "@ant-design/icons-vue";
 import {
@@ -17,10 +14,8 @@ import {
   createExternalApiSceneBinding,
   deleteExternalApiConfig,
   deleteExternalApiSceneBinding,
-  getExternalApiSecrets,
   listExternalApiConfigs,
   listExternalApiSceneBindings,
-  setExternalApiSecrets,
   testExternalApiConfig,
   updateExternalApiConfig,
   updateExternalApiConfigStatus,
@@ -87,7 +82,6 @@ const DEFAULT_IMAGE_EDIT_MAX_REFERENCE_IMAGES = 6;
 const configs = ref<ExternalApiConfig[]>([]);
 const sceneBindings = ref<ExternalApiSceneBinding[]>([]);
 const loading = ref(false);
-const secretSaving = ref(false);
 const saving = ref(false);
 const testing = ref(false);
 const bindingSavingKey = ref("");
@@ -109,13 +103,10 @@ const isSceneCopyMode = ref(false);
 const configGroupFilter = ref("all");
 const configRequestFormatFilter = ref<"all" | ExternalApiRequestFormat>("all");
 const configNameFilter = ref("");
+const expandedConfigGroups = ref<string[]>([]);
 const bindingGroupFilter = ref("all");
 const bindingSceneTypeFilter = ref<"all" | ExternalApiSceneType>("all");
 const bindingNameFilter = ref("");
-const secretVisible = ref(false);
-const tongyiSecretVisible = ref(false);
-const geminiKey = ref("");
-const tongyiKey = ref("");
 const configImportJson = ref("");
 const sceneImportJson = ref("");
 
@@ -233,6 +224,27 @@ const groupedConfigs = computed(() => {
       }),
     }));
 });
+const allConfigGroupsExpanded = computed(() => (
+  groupedConfigs.value.length > 0
+  && groupedConfigs.value.every((block) => expandedConfigGroups.value.includes(block.group))
+));
+
+function isConfigGroupExpanded(group: string) {
+  return expandedConfigGroups.value.includes(group);
+}
+
+function toggleConfigGroup(group: string) {
+  expandedConfigGroups.value = isConfigGroupExpanded(group)
+    ? expandedConfigGroups.value.filter((item) => item !== group)
+    : [...expandedConfigGroups.value, group];
+}
+
+function toggleAllConfigGroups() {
+  expandedConfigGroups.value = allConfigGroupsExpanded.value
+    ? []
+    : groupedConfigs.value.map((block) => block.group);
+}
+
 const configUsageMap = computed(() => {
   const map = new Map<number, ConfigUsageScene[]>();
   const appendUsage = (configId: number | null | undefined, binding: ExternalApiSceneBinding, role: ConfigUsageRole) => {
@@ -304,19 +316,6 @@ const bindingOptionGroups = computed(() => {
       options: options.sort((a, b) => a.label.localeCompare(b.label, "zh-CN")),
     }));
 });
-const maskedGeminiKey = computed(() => {
-  if (!geminiKey.value) return "";
-  const value = geminiKey.value;
-  if (value.length <= 8) return "••••••••";
-  return value.slice(0, 4) + "••••••••" + value.slice(-4);
-});
-const maskedTongyiKey = computed(() => {
-  if (!tongyiKey.value) return "";
-  const value = tongyiKey.value;
-  if (value.length <= 8) return "••••••••";
-  return value.slice(0, 4) + "••••••••" + value.slice(-4);
-});
-
 function sceneTypeLabel(sceneType: ExternalApiSceneBinding["scene_type"]) {
   if (sceneType === "generate") return "文生图";
   if (sceneType === "image_edit") return "图编辑";
@@ -636,15 +635,12 @@ function validateResolutionCreditCostsJson(raw: string, label: string) {
 async function load() {
   loading.value = true;
   try {
-    const [configRows, bindingRows, secretConfig] = await Promise.all([
+    const [configRows, bindingRows] = await Promise.all([
       listExternalApiConfigs(),
       listExternalApiSceneBindings(),
-      getExternalApiSecrets(),
     ]);
     configs.value = configRows;
     sceneBindings.value = bindingRows;
-    geminiKey.value = secretConfig?.key || "";
-    tongyiKey.value = secretConfig?.tongyi_key || "";
   } catch (err: any) {
     message.error(err.response?.data?.detail || "获取接口管理数据失败");
   } finally {
@@ -1255,97 +1251,17 @@ function handleDeleteScene(record: ExternalApiSceneBinding) {
   });
 }
 
-async function handleSaveSecrets() {
-  secretSaving.value = true;
-  try {
-    await setExternalApiSecrets({
-      key: geminiKey.value.trim(),
-      tongyi_key: tongyiKey.value.trim(),
-    });
-    message.success("接口密钥保存成功");
-    await load();
-  } catch (err: any) {
-    message.error(err.response?.data?.detail || "接口密钥保存失败");
-  } finally {
-    secretSaving.value = false;
-  }
-}
-
-function copySecret(value: string, label: string) {
-  if (!value) return;
-  navigator.clipboard.writeText(value).then(() => {
-    message.success(`${label}已复制到剪贴板`);
-  });
-}
 </script>
 
 <template>
   <div class="page warm-page motion-page-enter">
     <a-space direction="vertical" :size="16" style="width: 100%">
-      <a-card title="接口密钥" class="warm-card api-card motion-fade-up motion-card-lift" style="--motion-delay: 40ms" :loading="loading">
-        <a-alert
-          class="warm-alert"
-          type="info"
-          show-icon
-          message="Gemini API Key 与通义千问 API Key 仅超级管理员可见，可在接口模板中通过 {{ api_key }} 和 {{ bearer_token }} 占位符使用。"
-          style="margin-bottom: 16px"
-        />
-        <div class="secret-grid">
-          <div>
-            <div class="secret-label">Gemini API Key</div>
-            <div class="secret-input-row">
-              <a-input
-                v-if="secretVisible"
-                v-model:value="geminiKey"
-                class="warm-input"
-                placeholder="请输入 Gemini API Key"
-              />
-              <div v-else class="secret-masked" @click="secretVisible = true">
-                {{ geminiKey ? maskedGeminiKey : "暂未配置" }}
-              </div>
-              <a-button class="api-secondary-btn api-icon-btn" @click="secretVisible = !secretVisible">
-                <template #icon>
-                  <EyeInvisibleOutlined v-if="secretVisible" />
-                  <EyeOutlined v-else />
-                </template>
-              </a-button>
-              <a-button class="api-secondary-btn api-icon-btn" :disabled="!geminiKey" @click="copySecret(geminiKey, 'Gemini Key')">
-                <template #icon><CopyOutlined /></template>
-              </a-button>
-            </div>
-          </div>
-          <div>
-            <div class="secret-label">通义千问 API Key</div>
-            <div class="secret-input-row">
-              <a-input
-                v-if="tongyiSecretVisible"
-                v-model:value="tongyiKey"
-                class="warm-input"
-                placeholder="请输入通义千问 API Key"
-              />
-              <div v-else class="secret-masked" @click="tongyiSecretVisible = true">
-                {{ tongyiKey ? maskedTongyiKey : "暂未配置" }}
-              </div>
-              <a-button class="api-secondary-btn api-icon-btn" @click="tongyiSecretVisible = !tongyiSecretVisible">
-                <template #icon>
-                  <EyeInvisibleOutlined v-if="tongyiSecretVisible" />
-                  <EyeOutlined v-else />
-                </template>
-              </a-button>
-              <a-button class="api-secondary-btn api-icon-btn" :disabled="!tongyiKey" @click="copySecret(tongyiKey, '通义 Key')">
-                <template #icon><CopyOutlined /></template>
-              </a-button>
-            </div>
-          </div>
-        </div>
-        <a-button type="primary" class="api-primary-btn" :icon="h(SaveOutlined)" :loading="secretSaving" @click="handleSaveSecrets">
-          保存接口密钥
-        </a-button>
-      </a-card>
-
-      <a-card title="接口配置" class="warm-card warm-table-card api-card motion-fade-up motion-card-lift" style="--motion-delay: 120ms">
+      <a-card title="接口配置" class="warm-card warm-table-card api-card motion-fade-up motion-card-lift" style="--motion-delay: 40ms">
         <template #extra>
           <a-space wrap>
+            <a-button class="api-secondary-btn" @click="toggleAllConfigGroups">
+              {{ allConfigGroupsExpanded ? "全部折叠" : "全部展开" }}
+            </a-button>
             <a-input
               v-model:value="configNameFilter"
               class="warm-input"
@@ -1388,10 +1304,18 @@ function copySecret(value: string, label: string) {
           <a-empty v-if="!groupedConfigs.length" description="没有匹配的接口" />
           <div v-else class="api-config-groups">
             <section v-for="block in groupedConfigs" :key="block.group" class="api-config-group">
-              <div class="api-config-group-title">
+              <button
+                type="button"
+                class="api-config-group-title"
+                :class="{ 'is-expanded': isConfigGroupExpanded(block.group) }"
+                @click="toggleConfigGroup(block.group)"
+              >
+                <DownOutlined class="api-config-group-arrow" />
                 <span>{{ block.group }}</span>
                 <span class="api-config-group-count">{{ block.items.length }} 个接口</span>
-              </div>
+              </button>
+              <div class="api-config-group-body" :class="{ 'is-expanded': isConfigGroupExpanded(block.group) }">
+              <div class="api-config-group-body-inner">
               <div class="api-config-grid">
                 <article
                   v-for="item in block.items"
@@ -1461,6 +1385,8 @@ function copySecret(value: string, label: string) {
                     {{ configUsageLabel(item.id) }}
                   </div>
                 </article>
+              </div>
+              </div>
               </div>
             </section>
           </div>
@@ -2391,6 +2317,48 @@ function copySecret(value: string, label: string) {
   color: #5d4526;
   font-size: 16px;
   font-weight: 700;
+}
+
+button.api-config-group-title {
+  align-items: center;
+  width: 100%;
+  margin-bottom: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.api-config-group-title.is-expanded {
+  margin-bottom: 12px;
+}
+
+.api-config-group-arrow {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  transition: transform 0.2s ease;
+}
+
+button.api-config-group-title.is-expanded .api-config-group-arrow {
+  transform: rotate(180deg);
+}
+
+.api-config-group-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.22s var(--motion-ease-enter, cubic-bezier(0.24, 0.72, 0.32, 1));
+}
+
+.api-config-group-body.is-expanded {
+  grid-template-rows: 1fr;
+}
+
+.api-config-group-body-inner {
+  min-height: 0;
+  overflow: hidden;
 }
 
 .api-config-group-count {

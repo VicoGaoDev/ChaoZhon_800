@@ -62,8 +62,9 @@ class AlipayTradeQueryResult:
 PLAN_CATALOG: tuple[PaymentPlan, ...] = (
     PaymentPlan(key="starter", title="100积分包", amount_fen=750, credits=100, tag="入门推荐"),
     PaymentPlan(key="light", title="500积分包", amount_fen=3650, credits=500),
-    PaymentPlan(key="value", title="1000积分包", amount_fen=6890, credits=1000, tag="热门选择"),
+    PaymentPlan(key="value", title="1000积分包", amount_fen=6850, credits=1000, tag="热门选择"),
     PaymentPlan(key="vip", title="2000积分包", amount_fen=12500, credits=2000, tag="超值加量"),
+    PaymentPlan(key="mega", title="10000积分包", amount_fen=56500, credits=10000, tag="大额特惠"),
 )
 PLAN_CATALOG_MAP = {plan.key: plan for plan in PLAN_CATALOG}
 STARTER_PLAN_KEY = "starter"
